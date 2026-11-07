@@ -97,6 +97,7 @@ function D:Snapshot(reason)
     end
     s.sysIcons = {}
     for action, path in pairs(KB.SYS_ICON or {}) do s.sysIcons[action] = KB:SystemIcon(action) or ("MISSING " .. tostring(type(path) == "table" and path[1] or path)) end
+    s.skills = KB:SkillList()
     s.sysButtons = {}
     for action, list in pairs(KB.SYSBTN or {}) do
         local _, n = KB:SysButton(action)

@@ -342,3 +342,58 @@ function KB:ApplySysClicks()
         end
     end
 end
+
+-- Profession skill ("45/75") shown on profession spells ---------------------------------------------
+-- Spell names that don't match their skill's name.
+local SKILL_ALIAS = { Smelting = "Mining", ["Herb Gathering"] = "Herbalism", ["Find Herbs"] = "Herbalism", Gardening = "Herbalism", ["Find Minerals"] = "Mining",
+    ["Disenchant"] = "Enchanting", ["Pick Lock"] = "Lockpicking", ["Prospecting"] = "Jewelcrafting", ["Milling"] = "Inscription" }
+local skills, skillsOk = nil, false
+
+local function readSkills()
+    local t = {}
+    pcall(function()
+        if GetNumSkillLines and GetSkillLineInfo then
+            for i = 1, GetNumSkillLines() do
+                local name, header, _, rank, _, _, max = GetSkillLineInfo(i)
+                if name and not header and max and max > 0 then t[name] = { rank, max } end
+            end
+        end
+    end)
+    pcall(function()
+        if GetProfessions and GetProfessionInfo then
+            for _, i in pairs({ GetProfessions() }) do
+                local name, _, rank, max = GetProfessionInfo(i)
+                if name and max and max > 0 then t[name] = { rank, max } end
+            end
+        end
+    end)
+    return t
+end
+
+function KB:SkillList()
+    if not skills then skills = readSkills() end
+    local out = {}
+    for n, v in pairs(skills) do out[n] = v[1] .. "/" .. v[2] end
+    return out
+end
+
+function KB:SkillText(spellName)
+    if not spellName or KB.db.ui.skillNumbers == false then return nil end
+    if not skills then skills = readSkills() end
+    local e = skills[spellName] or skills[SKILL_ALIAS[spellName] or ""]
+    if not e then
+        for name, v in pairs(skills) do
+            if spellName:find(name, 1, true) then e = v; break end
+        end
+    end
+    return e and (e[1] .. "/" .. e[2]) or nil
+end
+
+local sk = CreateFrame("Frame")
+sk:RegisterEvent("SKILL_LINES_CHANGED")
+sk:RegisterEvent("PLAYER_LOGIN")
+pcall(sk.RegisterEvent, sk, "CHAT_MSG_SKILL")
+sk:SetScript("OnEvent", function()
+    skills = nil
+    if KB.UI and KB.UI.Refresh then KB.UI.rev = (KB.UI.rev or 0) + 0; KB.UI:Refresh(true) end
+end)

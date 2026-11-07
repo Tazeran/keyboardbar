@@ -120,6 +120,8 @@ function C:Build()
         function(v) ui().showNames = v end); step()
     checkbox(f, y, "Always show the cycle key (~)", function() return ui().alwaysShowCycle ~= false end,
         function(v) ui().alwaysShowCycle = v; KB.UI:Refresh(true) end); step()
+    checkbox(f, y, "Show profession skill (45/75) on keys", function() return ui().skillNumbers ~= false end,
+        function(v) ui().skillNumbers = v; KB.UI:Refresh(true) end); step()
     checkbox(f, y, "Hide Blizzard action bars (reload to undo)", function() return ui().hideBars end,
         function(v) ui().hideBars = v; if v then KB:HideBlizzardBars() else KB:Print("Blizzard bars return after /reload.") end end); step()
 

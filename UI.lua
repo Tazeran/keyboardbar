@@ -209,6 +209,10 @@ local function style(k, a, s, sys)
     k.name:SetText(KB.db.ui.showNames and a.name or "")
     local okc, many = pcall(function() return s.count and s.count > 1 end)
     k.count:SetText((okc and many) and s.count or "")
+    if a.type == "spell" then
+        local st = KB:SkillText(a.name)
+        if st then k.count:SetText(st) end
+    end
     local r, g, b = 1, 1, 1
     pcall(function()
         if s.usable == false then r, g, b = 0.4, 0.4, 0.4
@@ -283,25 +287,37 @@ local function staticShow(k, view, layer)
     return a ~= nil -- "assigned"
 end
 
+-- The keyboard is three sections (main block, Nav cluster, Numpad) that collapse independently: each
+-- stacks its own non-empty rows from the anchored edge.
+local SECS = { Main = 1, Nav = 2, Numpad = 3 }
+local function secOf(g) return SECS[g or "Main"] end
+
 function UI:ComputeLayout(view, layer)
-    local out, y = {}, 0
+    local out, ys, anchorBottom = {}, { 0, 0, 0 }, KB.db.ui.anchor == "bottom"
     for ri, list in ipairs(rowOf) do
-        local x, shown = 0, 0
+        local x, shown = 0, { 0, 0, 0 }
+        local first = {}
         for _, k in ipairs(list) do
             if k.gap then
                 if UI:GroupOn(k.group) then x = x + k.gap * UNIT end
             else
-                local w, grp = KB:KeyW(k.def), UI:GroupOn(k.def.group)
+                local w, grp, s = KB:KeyW(k.def), UI:GroupOn(k.def.group), secOf(k.def.group)
                 if grp then x = x + KB:KeyPad(k.def) * UNIT end
                 local show = (grp and staticShow(k, view, layer)) and true or false
-                out[k.idx] = { x = x, y = -y, show = show, r = ri }
-                if show then shown = shown + 1 end
+                out[k.idx] = { x = x, y = -ys[s], show = show, r = ri, s = s }
+                if show then shown[s] = shown[s] + 1 end
                 if grp then x = x + w * UNIT end
             end
         end
-        if shown > 0 or KB.db.ui.keepPositions then y = y + UNIT end
+        for s = 1, 3 do
+            if shown[s] > 0 or KB.db.ui.keepPositions then ys[s] = ys[s] + UNIT end
+        end
     end
-    return out, math.max(y, 1)
+    local h = math.max(ys[1], ys[2], ys[3], 1)
+    if anchorBottom then -- shorter sections sit on the bottom edge, not hang from the top
+        for _, e in pairs(out) do e.y = e.y - (h - ys[e.s]) end
+    end
+    return out, h
 end
 
 function UI:Reflow(sig)
@@ -345,16 +361,19 @@ function UI:LayoutTray(view)
         self.trayBase = self:ComputeLayout("assigned", self.layer)
     end
     local lay = self.trayBase
-    local rows, lit = {}, {}
+    local rows, lit = { {}, {}, {} }, {}
     for i, tk in ipairs(self.tray) do
-        if tk.lit and lay[i] and lay[i].show then rows[lay[i].r] = true; lit[#lit + 1] = i end
+        if tk.lit and lay[i] and lay[i].show then rows[lay[i].s][lay[i].r] = true; lit[#lit + 1] = i end
     end
-    local order = {}
-    for r in pairs(rows) do order[#order + 1] = r end
-    table.sort(order)
-    local ord = {}
-    for n, r in ipairs(order) do ord[r] = n - 1 end
-    local m = #order
+    local ord, m = {}, {}
+    for s = 1, 3 do
+        local order = {}
+        for r in pairs(rows[s]) do order[#order + 1] = r end
+        table.sort(order)
+        ord[s] = {}
+        for n, r in ipairs(order) do ord[s][r] = n - 1 end
+        m[s] = #order
+    end
     local off = 0
     for _, k in ipairs(keys) do
         if k.cycle and u.alwaysShowCycle ~= false then off = 1 end -- the cycle key keeps the edge row
@@ -366,9 +385,9 @@ function UI:LayoutTray(view)
         local tk, e = self.tray[i], lay[i]
         tk:ClearAllPoints()
         if u.anchor == "bottom" then
-            tk:SetPoint("BOTTOMLEFT", tf, "BOTTOMLEFT", e.x, (m - 1 - ord[e.r] + off) * UNIT)
+            tk:SetPoint("BOTTOMLEFT", tf, "BOTTOMLEFT", e.x, (m[e.s] - 1 - ord[e.s][e.r] + (e.s == 1 and off or 0)) * UNIT)
         else
-            tk:SetPoint("TOPLEFT", tf, "TOPLEFT", e.x, -(ord[e.r] + off) * UNIT)
+            tk:SetPoint("TOPLEFT", tf, "TOPLEFT", e.x, -(ord[e.s][e.r] + (e.s == 1 and off or 0)) * UNIT)
         end
     end
 end
@@ -582,7 +601,7 @@ function UI:Refresh(force)
     self:LayoutTray(view)
     local u = KB.db.ui
     self:Reflow(table.concat({ view, self.layer, tostring(KB:RowUnits()), u.sizeMode, u.style, GAP(), tostring(u.keepPositions),
-        tostring(u.alwaysShowCycle), tostring(u.showNav), tostring(u.showNumpad), self.rev or 0 }, "|"))
+        tostring(u.alwaysShowCycle), tostring(u.showNav), tostring(u.showNumpad), u.anchor, self.rev or 0 }, "|"))
 end
 
 -- System-binding drag (rebinding game keys) ---------------------------------

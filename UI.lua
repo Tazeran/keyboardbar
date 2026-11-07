@@ -27,6 +27,7 @@ local function receive(k)
     if not a then return end
     local bk = bindKey(k)
     local old = KB:GetAction(bk)
+    UI.dragSrc = nil -- a drop on a key: this drag is settled
     KB:SetAction(bk, a)
     ClearCursor()
     if old then KB:PickupAction(old) end
@@ -71,7 +72,7 @@ local function createKey(parent, def, display)
     k.count = over:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     k.count:SetPoint("BOTTOMRIGHT", -2, 2)
     if display then k:EnableMouse(false); return k end
-    k:RegisterForDrag("LeftButton")
+    k:RegisterForDrag("LeftButton", "RightButton")
     k:SetScript("OnReceiveDrag", receive)
     -- HookScript so the secure click handler (the actual cast) is kept.
     k:HookScript("PreClick", function(self, btn, down)
@@ -85,7 +86,8 @@ local function createKey(parent, def, display)
             return
         end
         if GetCursorInfo() then
-            if not down then receive(self) end
+            -- only a mouse release over this key drops the item here; a keyboard press of the same key must not
+            if not down and self:IsMouseOver() then receive(self) end
             KB:BlankKey(self) -- placing an action must not also cast it
             self.kbBlanked = true
         elseif btn == "RightButton" and IsShiftKeyDown() and not down then
@@ -99,19 +101,40 @@ local function createKey(parent, def, display)
         -- Never rebuild bindings during a normal press: that interrupts key-down/key-up delivery.
         if self.kbBlanked and not InCombatLockdown() then self.kbBlanked = nil; KB:ApplyBindings() end
     end)
-    k:SetScript("OnDragStart", function(self)
+    k:SetScript("OnDragStart", function(self, button)
         if InCombatLockdown() then return end
+        -- Right-drag never casts (keys only have a left-click action). Left-drag is only for arrange mode
+        -- (settings window open), where clicking keys is switched off.
+        if button ~= "RightButton" and not UI.edit then return end
+        if KB.db.ui.view ~= "full" then
+            -- Rearranging is only allowed in the Full view, so a stray drag while playing can't pull anything off.
+            if self.action or self.sys then KB:Print("Switch to the Full view to move keys around.") end
+            return
+        end
         local bk = bindKey(self)
         local a = KB:GetAction(bk)
         if a then
             if self.def.fixed then return end
+            UI.dragSrc = { bk = bk, action = a }
             KB:PickupAction(a); KB:ClearAction(bk); UI:Refresh(true)
         else
             local sys = KB:GetSystemAction(bk)
             if sys then UI:StartSystemDrag(self, bk, sys) end
         end
     end)
-    k:SetScript("OnDragStop", function(self) if UI.dragSys then UI:StopSystemDrag() end end)
+    k:SetScript("OnDragStop", function(self)
+        if UI.dragSys then UI:StopSystemDrag() end
+        local src = UI.dragSrc
+        if src then
+            -- Dragged off a key and released somewhere that isn't a key: put it back where it came from.
+            C_Timer.After(0.1, function()
+                if UI.dragSrc ~= src then return end -- it was dropped on a key meanwhile
+                UI.dragSrc = nil
+                if GetCursorInfo() then ClearCursor() end
+                KB:SetAction(src.bk, src.action); UI:Refresh(true)
+            end)
+        end
+    end)
     k:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local a = self.action
@@ -498,6 +521,7 @@ end
 
 function UI:SetEditMode(on)
     self.edit = on and true or false
+    KB:ApplyBindings() -- while editing, clicking/pressing keys is switched off so nothing casts mid-arrangement
     self.chrome:SetShown(self.edit)
     if self.edit and not self.frame:IsShown() then self.frame:Show() end
     self:ApplySize()

@@ -67,7 +67,7 @@ function C:Build()
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -12); title:SetText("Keyboard Bar")
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("TOP", 0, -32); hint:SetText("Drag the keyboard's panel to move it. /kb closes this window.")
+    hint:SetPoint("TOP", 0, -32); hint:SetText("Drag keys with right mouse (or left, here). /kb closes.")
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -2, -2)
 

@@ -58,6 +58,10 @@ function KB:ApplyBindings()
     end
     self.lastApply = GetTime()
     self:ApplySysClicks()
+    -- Arrange mode (settings window open): keys are inert so dragging/clicking can't cast anything.
+    if self.UI and self.UI.edit then
+        for _, kf in ipairs(self.keyFrames) do clearAttrs(kf) end
+    end
     -- Default view-cycle key (tilde) unless you put an action on it. Plain insecure button: it only changes display.
     local cks = { self.db.ui.cycleKey, self.db.ui.cycleKey2 == nil and "\\" or self.db.ui.cycleKey2 }
     for _, ck in ipairs(cks) do

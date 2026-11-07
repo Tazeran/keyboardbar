@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: Keyboard Bar
+## Notes: An on-screen keyboard that doubles as your action bar. Drop spells, items and macros onto keys.
+## Author: Whitewood
+## Version: 0.1.0
+## SavedVariables: KeyboardBarDB
+
+Core.lua
+Debug.lua
+Layout.lua
+Bars.lua
+Actions.lua
+UI.lua
+Config.lua

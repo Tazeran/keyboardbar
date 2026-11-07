@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="KEYBOARDBAR_CYCLEVIEW" header="KEYBOARDBAR" category="ADDONS">KeyboardBar_CycleView()</Binding>
+  <Binding name="KEYBOARDBAR_COLLAPSE" category="ADDONS">KeyboardBar_Collapse()</Binding>
+  <Binding name="KEYBOARDBAR_TOGGLE" category="ADDONS">KeyboardBar_Toggle()</Binding>
+</Bindings>

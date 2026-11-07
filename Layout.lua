@@ -19,7 +19,7 @@ local function N(id, label, w, fixed) return K("NUMPAD" .. id, label, w, fixed, 
 local function NAV(id, label) return K(id, label, 1, false, "Nav") end
 
 KB.ROWS = {
-    join(K("ESCAPE", "Esc", 1, true), G(1), fkeys(1, 4), G(0.5), fkeys(5, 8), G(0.5), fkeys(9, 12)),
+    join(K("ESCAPE", "Esc", 1, true), G(0.5), fkeys(1, 4), G(0.75), fkeys(5, 8), G(0.75), fkeys(9, 12)),
     join(chars("`1234567890-="), K("BACKSPACE", "Bksp", 2),
         G(0.5, "Nav"), NAV("INSERT", "Ins"), NAV("HOME", "Home"), NAV("PAGEUP", "PgUp"),
         G(0.5, "Numpad"), K("NUMLOCK", "NumLk", 1, true, "Numpad"), N("DIVIDE", "N/"), N("MULTIPLY", "N*"), N("MINUS", "N-")),

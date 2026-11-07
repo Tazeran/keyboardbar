@@ -33,10 +33,11 @@ local function receive(k)
     UI:Refresh(true)
 end
 
-local function createKey(parent, def)
+local function createKey(parent, def, display)
     local name = "KeyboardBarKey" .. def.id:gsub("%W", function(c) return ("_%02x"):format(c:byte()) end)
-    local k = CreateFrame("Button", name, parent, def.fixed and "BackdropTemplate" or "SecureActionButtonTemplate,BackdropTemplate")
-    if not def.fixed then
+    if display then name = nil end
+    local k = CreateFrame("Button", name, parent, display and "BackdropTemplate" or "SecureActionButtonTemplate,BackdropTemplate")
+    if not def.fixed and not display then
         k:RegisterForClicks("AnyUp", "AnyDown")
         table.insert(KB.keyFrames, k)
     end
@@ -69,11 +70,11 @@ local function createKey(parent, def)
     k.arrow:SetSize(18, 18); k.arrow:SetPoint("CENTER", 0, 3); k.arrow:Hide()
     k.count = over:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     k.count:SetPoint("BOTTOMRIGHT", -2, 2)
+    if display then k:EnableMouse(false); return k end
     k:RegisterForDrag("LeftButton")
     k:SetScript("OnReceiveDrag", receive)
     -- HookScript so the secure click handler (the actual cast) is kept.
     k:HookScript("PreClick", function(self, btn, down)
-        if self.cycle and btn == "LeftButton" and not down and not GetCursorInfo() then UI:CycleView() end
         if InCombatLockdown() then return end
         if btn == "MiddleButton" and not down and not GetCursorInfo() then
             local bk = bindKey(self)
@@ -137,21 +138,23 @@ end
 -- bg / border are {r,g,b,a}. "flat" = dark square + thin border; "blizzard" = the game's own
 -- action-slot textures (border art tinted by the state colour).
 local function paint(k, bg, bd)
+    -- With borders off, only the "something is happening" borders (casting / active) are still drawn.
+    local noBorder = KB.db.ui.borders == false and not bd.state
     if KB.db.ui.style == "blizzard" then
         k:SetBackdropColor(0, 0, 0, 0); k:SetBackdropBorderColor(0, 0, 0, 0)
-        k.bgArt:Show(); k.normalArt:Show()
+        k.bgArt:Show(); k.normalArt:SetShown(not noBorder)
         k.bgArt:SetVertexColor(math.min(1, 0.6 + bg[1] * 1.5), math.min(1, 0.6 + bg[2] * 1.5), math.min(1, 0.6 + bg[3] * 1.5), bg[4] < 0.5 and 0.5 or 1)
         k.normalArt:SetVertexColor(math.min(1, bd[1] * 1.4), math.min(1, bd[2] * 1.4), math.min(1, bd[3] * 1.4), 1)
     else
         k.bgArt:Hide(); k.normalArt:Hide()
-        k:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]); k:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
+        k:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]); k:SetBackdropBorderColor(bd[1], bd[2], bd[3], noBorder and 0 or bd[4])
     end
 end
 
 local function style(k, a, s, sys)
     k.action = a
     k.sys = sys
-    k.label:SetText(k.cycle and "~" or k.def.label)
+    k.label:SetText(k.cycle and (k.def.id == "`" and "~" or k.def.label) or k.def.label)
     if k.cycle then
         k.icon:Hide(); k.count:SetText(""); k.cd:Clear(); k.cdText:SetText(""); k.arrow:Hide()
         k.name:SetText(KB.VIEW_LABEL[KB.db.ui.view] or "")
@@ -225,7 +228,7 @@ local function style(k, a, s, sys)
     local bd = { 0.6, 0.6, 0.65, 1 }
     local casting, active = false, false
     pcall(function() casting = s.cast ~= nil and s.cast == s.castName; active = s.active and true or false end)
-    if casting then bd = { 0.2, 1, 0.2, 1 } elseif active then bd = { 1, 0.9, 0.2, 1 } end
+    if casting then bd = { 0.2, 1, 0.2, 1, state = true } elseif active then bd = { 1, 0.9, 0.2, 1, state = true } end
     paint(k, { 0, 0, 0, 1 }, bd)
 end
 
@@ -234,19 +237,32 @@ local function wanted(view, a, s, sys)
     if view == "bound" then return a ~= nil or sys ~= nil end
     if not a then return false end
     if view == "assigned" then return true end
-    if view == "cooldown" then
-        if s.start == nil or s.dur == nil then return false end
-        if issecretvalue and (issecretvalue(s.start) or issecretvalue(s.dur)) then return nil end -- unknown: keep as is
-        return (s.dur > 1.5 and (s.start + s.dur) > GetTime()) and true or false
-    end
+    if view == "cooldown" then return false end -- the cooldown tray (unprotected copies) shows these
     return true
 end
 
-function UI:Reflow(sig)
-    if sig == self.sig or InCombatLockdown() then return end -- keys are secure: no moving in combat
-    self.sig = sig
-    local y = 0
-    for _, list in ipairs(rowOf) do
+-- Layout ---------------------------------------------------------------------
+-- Which keys exist in a view is decided by what is bound (fixed while in combat), so every view/layer
+-- combination can be computed ahead of time and handed to the secure header (see UI:BuildSecure),
+-- which then rearranges the protected keys even during combat.
+-- layer: "" / "SHIFT-" / "CTRL-" / "ALT-" (or "X" = a modifier combination, nothing bound).
+local function staticShow(k, view, layer)
+    local a, sys
+    if layer ~= "X" then
+        local bk = layer .. k.def.id
+        a = KB:GetAction(bk)
+        sys = (not a) and KB:GetSystemAction(bk) or nil
+    end
+    if KB:IsCycleKey(k.def.id) and layer == "" and not a and KB.db.ui.alwaysShowCycle ~= false then return true end
+    if view == "full" then return true end
+    if view == "bound" then return a ~= nil or sys ~= nil end
+    if view == "cooldown" then return false end
+    return a ~= nil -- "assigned"
+end
+
+function UI:ComputeLayout(view, layer)
+    local out, y = {}, 0
+    for ri, list in ipairs(rowOf) do
         local x, shown = 0, 0
         for _, k in ipairs(list) do
             if k.gap then
@@ -254,19 +270,178 @@ function UI:Reflow(sig)
             else
                 local w, grp = KB:KeyW(k.def), UI:GroupOn(k.def.group)
                 if grp then x = x + KB:KeyPad(k.def) * UNIT end
-                k:SetSize(w * UNIT - GAP(), UNIT - GAP())
-                if k.visible then
-                    k:ClearAllPoints()
-                    k:SetPoint("TOPLEFT", self.body, "TOPLEFT", x, -y); shown = shown + 1
-                end
+                local show = (grp and staticShow(k, view, layer)) and true or false
+                out[k.idx] = { x = x, y = -y, show = show, r = ri }
+                if show then shown = shown + 1 end
                 if grp then x = x + w * UNIT end
             end
         end
         if shown > 0 or KB.db.ui.keepPositions then y = y + UNIT end
     end
-    self.body:SetHeight(math.max(y, 1))
+    return out, math.max(y, 1)
+end
+
+function UI:Reflow(sig)
+    if sig == self.sig or InCombatLockdown() then return end -- the secure header handles combat
+    self.sig = sig
+    local lay, h = self:ComputeLayout(KB.db.ui.view, self.layer)
+    for i, k in ipairs(keys) do
+        local e = lay[i]
+        k:SetSize(KB:KeyW(k.def) * UNIT - GAP(), UNIT - GAP())
+        if self.tray then self.tray[i]:SetSize(KB:KeyW(k.def) * UNIT - GAP(), UNIT - GAP()) end
+        if e.show then
+            k:ClearAllPoints()
+            k:SetPoint("TOPLEFT", self.body, "TOPLEFT", e.x, e.y)
+        end
+        k:SetShown(e.show)
+    end
+    self.body:SetHeight(h)
     self.body:SetWidth(KB:RowUnits() * UNIT)
     self:ApplySize()
+    self.traySig = nil
+    self:Publish()
+end
+
+-- Cooldown tray ---------------------------------------------------------------
+-- The Cooldowns view needs rows that re-collapse as cooldowns start and end, even in combat. Protected keys
+-- can't do that (and no script can read cooldowns), so this view draws unprotected copies of the keys that
+-- have an ability. They keep each key's column, and only the rows that currently have something cooling
+-- down are stacked, from the anchored edge. The real keys stay hidden but keep handling key presses.
+function UI:LayoutTray(view)
+    local tf = self.trayFrame
+    if not tf then return end
+    if view ~= "cooldown" then
+        if tf:IsShown() then tf:Hide() end
+        return
+    end
+    if not tf:IsShown() then tf:Show() end
+    local u = KB.db.ui
+    local base = table.concat({ self.layer, tostring(u.showNav), tostring(u.showNumpad), tostring(self.rev or 0), tostring(KB:RowUnits()), u.sizeMode }, "|")
+    if self.trayBaseSig ~= base then
+        self.trayBaseSig = base
+        self.trayBase = self:ComputeLayout("assigned", self.layer)
+    end
+    local lay = self.trayBase
+    local rows, lit = {}, {}
+    for i, tk in ipairs(self.tray) do
+        if tk.lit and lay[i] and lay[i].show then rows[lay[i].r] = true; lit[#lit + 1] = i end
+    end
+    local order = {}
+    for r in pairs(rows) do order[#order + 1] = r end
+    table.sort(order)
+    local ord = {}
+    for n, r in ipairs(order) do ord[r] = n - 1 end
+    local m = #order
+    local off = 0
+    for _, k in ipairs(keys) do
+        if k.cycle and u.alwaysShowCycle ~= false then off = 1 end -- the cycle key keeps the edge row
+    end
+    local sig = u.anchor .. "|" .. off .. "|" .. GAP() .. "|" .. base .. "|" .. table.concat(lit, ",")
+    if sig == self.traySig then return end
+    self.traySig = sig
+    for _, i in ipairs(lit) do
+        local tk, e = self.tray[i], lay[i]
+        tk:ClearAllPoints()
+        if u.anchor == "bottom" then
+            tk:SetPoint("BOTTOMLEFT", tf, "BOTTOMLEFT", e.x, (m - 1 - ord[e.r] + off) * UNIT)
+        else
+            tk:SetPoint("TOPLEFT", tf, "TOPLEFT", e.x, -(ord[e.r] + off) * UNIT)
+        end
+    end
+end
+
+-- Secure layout header --------------------------------------------------------
+-- A protected button whose script (running in the game's restricted environment, which IS allowed to
+-- move protected frames in combat) re-lays-out every key. It runs when the view-cycle key is clicked
+-- or pressed, and when a modifier key changes the layer.
+local CODE = { { "B", "" }, { "S", "SHIFT-" }, { "C", "CTRL-" }, { "A", "ALT-" }, { "X", "X" } }
+local PIN = { [""] = "", ["SHIFT-"] = "S", ["CTRL-"] = "C", ["ALT-"] = "A" }
+
+local APPLY = [=[
+    self:SetAttribute("dbgapply", (self:GetAttribute("dbgapply") or 0) + 1)
+    local moved = 0
+    local L = self:GetAttribute("layer") or "B"
+    if L == "B" then
+        local p = self:GetAttribute("pinned")
+        if p and p ~= "" then L = p end
+    end
+    local V = self:GetAttribute("view") or "full"
+    local body = self:GetFrameRef("body")
+    local n = self:GetAttribute("nkeys") or 0
+    for i = 1, n do
+        local k = self:GetFrameRef("k" .. i)
+        local d = self:GetAttribute("L" .. L .. V .. ":" .. i)
+        if k and d and body then
+            local x, y, s = strsplit(",", d)
+            if s == "1" then
+                k:ClearAllPoints()
+                k:SetPoint("TOPLEFT", body, "TOPLEFT", tonumber(x), tonumber(y))
+                k:Show()
+                moved = moved + 1
+            else
+                k:Hide()
+            end
+        end
+    end
+    self:SetAttribute("dbgmoved", moved)
+    self:SetAttribute("dbginfo", L .. V .. " n=" .. n)
+    local height = self:GetAttribute("H" .. L .. V)
+    if height and body then body:SetHeight(height) end
+]=]
+
+local CYCLE = [=[
+self:SetAttribute("dbgclick", (self:GetAttribute("dbgclick") or 0) + 1)
+local order = newtable("full", "bound", "assigned", "cooldown")
+local cur = self:GetAttribute("view")
+local idx = 1
+for i = 1, 4 do
+    if order[i] == cur then idx = i end
+end
+self:SetAttribute("view", order[idx % 4 + 1])
+]=] .. APPLY
+
+function UI:BuildSecure()
+    local hdr = CreateFrame("Button", "KeyboardBarCycleHdr", UIParent, "SecureHandlerClickTemplate,SecureHandlerStateTemplate")
+    self.hdr = hdr
+    hdr:RegisterForClicks("AnyUp", "AnyDown")
+    -- Repaint right after the script ran, so keys that should fade (e.g. entering Cooldowns) do so at once
+    -- instead of showing for up to one refresh tick.
+    hdr:HookScript("PostClick", function() UI:Refresh(true) end)
+    hdr:SetAttribute("_onclick", CYCLE)
+    hdr:SetAttribute("_onstate-layer", [=[
+        self:SetAttribute("layer", newstate)
+]=] .. APPLY)
+    hdr:SetFrameRef("body", self.body)
+    for i, k in ipairs(keys) do hdr:SetFrameRef("k" .. i, k) end
+    hdr:SetAttribute("nkeys", #keys)
+    hdr:SetAttribute("view", KB.db.ui.view)
+    hdr:SetAttribute("layer", "B")
+    RegisterStateDriver(hdr, "layer",
+        "[mod:shift,nomod:ctrl,nomod:alt] S; [mod:ctrl,nomod:shift,nomod:alt] C; [mod:alt,nomod:shift,nomod:ctrl] A; [nomod] B; X")
+end
+
+function UI:SyncPinned()
+    if self.hdr and not InCombatLockdown() then self.hdr:SetAttribute("pinned", PIN[self.pinned] or "") end
+end
+
+-- Hand every view x layer layout to the header (out of combat only).
+function UI:Publish()
+    local hdr = self.hdr
+    if not hdr or InCombatLockdown() then return end
+    hdr:SetAttribute("nkeys", #keys)
+    hdr:SetAttribute("view", KB.db.ui.view)
+    hdr:SetAttribute("pinned", PIN[self.pinned] or "")
+    for _, c in ipairs(CODE) do
+        for _, v in ipairs(KB.VIEWS) do
+            local lay, h = self:ComputeLayout(v, c[2])
+            for i = 1, #keys do
+                local e = lay[i]
+                hdr:SetAttribute("L" .. c[1] .. v .. ":" .. i, ("%.2f,%.2f,%d"):format(e.x, e.y, e.show and 1 or 0))
+            end
+            hdr:SetAttribute("H" .. c[1] .. v, h)
+        end
+    end
+    KB.Debug:Log("publish", "layouts published for " .. #keys .. " keys")
 end
 
 function UI:GroupOn(g)
@@ -286,7 +461,7 @@ function UI:ApplySize()
         if self.edit then h = math.max(h, UNIT) end
         f:SetSize(KB:RowUnits() * UNIT, h)
     end
-    self.body:SetShown(not collapsed)
+    if not InCombatLockdown() then self.body:SetShown(not collapsed) end
 end
 
 -- The window is chrome-less: just keys. The anchored edge (top or bottom) stays put while rows come and go.
@@ -300,6 +475,11 @@ function UI:PlaceFrame()
     else
         f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", p.x, p.top)
         self.body:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
+    end
+    if self.trayFrame then
+        self.trayFrame:ClearAllPoints()
+        self.trayFrame:SetPoint(ui.anchor == "bottom" and "BOTTOMLEFT" or "TOPLEFT", f, ui.anchor == "bottom" and "BOTTOMLEFT" or "TOPLEFT", 0, 0)
+        self.traySig = nil
     end
 end
 
@@ -326,44 +506,59 @@ end
 
 function UI:Refresh(force)
     if not self.frame or not self.frame:IsShown() then return end
+    if self.hdr then
+        local c, ap = self.hdr:GetAttribute("dbgclick"), self.hdr:GetAttribute("dbgapply")
+        local key = tostring(c) .. "/" .. tostring(ap)
+        if key ~= self.dbgKey then
+            self.dbgKey = key
+            KB.Debug:Log("secure", ("clicks=%s applies=%s moved=%s info=%s view=%s"):format(tostring(c), tostring(ap),
+                tostring(self.hdr:GetAttribute("dbgmoved")), tostring(self.hdr:GetAttribute("dbginfo")), tostring(self.hdr:GetAttribute("view"))))
+        end
+    end
+    local hv = self.hdr and self.hdr:GetAttribute("view")
+    if hv and hv ~= KB.db.ui.view and KB.VIEW_LABEL[hv] then KB.db.ui.view = hv; self.sig = nil end
     self.layer = self:Layer()
     self.layerBtn:SetText(LAYER_LABEL[self.layer] or self.layer)
     self.viewBtn:SetText(KB.VIEW_LABEL[KB.db.ui.view])
     if KB.db.ui.collapsed then return end
-    local view, sig = KB.db.ui.view, {}
+    local view = KB.db.ui.view
     for i, k in ipairs(keys) do
         local a = KB:GetAction(bindKey(k))
         local ok, s = pcall(function() return a and KB:GetState(a) or {} end)
         if not ok then KB.Debug:Err("state " .. k.def.id, s); s = {} end
         local sys = (not a) and KB:GetSystemAction(bindKey(k)) or nil
-        k.cycle = (k.def.id == KB.db.ui.cycleKey and self.layer == "" and not a) or nil
+        k.cycle = (KB:IsCycleKey(k.def.id) and self.layer == "" and not a) or nil
         local w = (k.cycle and KB.db.ui.alwaysShowCycle ~= false) or wanted(view, a, s, sys)
-        local unknown = (w == nil)
-        if unknown then w = k.visible end
         local show = UI:GroupOn(k.def.group) and w
         k.visible = show
         k:SetAlpha(show and 1 or 0)
-        -- Cooldowns view: keep keys with an action shown (invisible via alpha) so that in combat, when
-        -- the lockdown forbids Show(), alpha alone can still bring one up.
-        local physical = show or (view == "cooldown" and a ~= nil and UI:GroupOn(k.def.group))
-        if not InCombatLockdown() then k:SetShown(physical) end
         local sok, serr = pcall(style, k, a, s, sys)
         if not sok then KB.Debug:Err("style " .. k.def.id, serr) end
-        if unknown and a and UI:GroupOn(k.def.group) then
-            -- Cooldown times are secret in combat, so ask the cooldown frame itself: it is shown while
-            -- something is cooling down. The global cooldown doesn't count.
-            local on = false
-            pcall(function()
-                local g = s.gcd
-                if g ~= nil and issecretvalue and issecretvalue(g) then g = false end
-                on = (k.cd:IsShown() and not g) and true or false
-            end)
-            show = on; k.visible = on
-            k:SetAlpha(on and 1 or 0)
+        local tk = self.tray and self.tray[i]
+        if tk then
+            if view == "cooldown" and a and UI:GroupOn(k.def.group) then
+                pcall(style, tk, a, s, nil)
+                -- Cooldown times are secret in combat, so ask the tray key's own cooldown frame: it is shown
+                -- while something is cooling down. The global cooldown doesn't count.
+                local on = false
+                pcall(function()
+                    local g = s.gcd
+                    if g ~= nil and issecretvalue and issecretvalue(g) then g = false end
+                    on = (tk.cd:IsShown() and not g) and true or false
+                end)
+                tk.lit = on
+                tk:SetAlpha(on and 1 or 0)
+                tk:Show()
+            else
+                tk.lit = false
+                tk:Hide()
+            end
         end
-        sig[i] = show and "1" or "0"
     end
-    self:Reflow(view .. tostring(KB:RowUnits()) .. KB.db.ui.sizeMode .. KB.db.ui.style .. GAP() .. tostring(KB.db.ui.keepPositions) .. table.concat(sig))
+    self:LayoutTray(view)
+    local u = KB.db.ui
+    self:Reflow(table.concat({ view, self.layer, tostring(KB:RowUnits()), u.sizeMode, u.style, GAP(), tostring(u.keepPositions),
+        tostring(u.alwaysShowCycle), tostring(u.showNav), tostring(u.showNumpad), self.rev or 0 }, "|"))
 end
 
 -- System-binding drag (rebinding game keys) ---------------------------------
@@ -400,7 +595,12 @@ function UI:StopSystemDrag()
 end
 
 -- Build ---------------------------------------------------------------------
-function UI:SetView(v) KB.db.ui.view = v; self.sig = nil; self:Refresh(true) end
+function UI:SetView(v)
+    if InCombatLockdown() then KB:Print("Use the cycle key to change views in combat."); return end
+    KB.db.ui.view = v; self.sig = nil
+    if self.hdr then self.hdr:SetAttribute("view", v) end
+    self:Refresh(true)
+end
 function UI:CycleView()
     local cur = 1
     for i, v in ipairs(KB.VIEWS) do if v == KB.db.ui.view then cur = i end end
@@ -415,6 +615,7 @@ function UI:SetScale(s)
     self:PlaceFrame()
 end
 function UI:ToggleCollapse()
+    if InCombatLockdown() then KB:Print("Can't collapse in combat."); return end
     KB.db.ui.collapsed = not KB.db.ui.collapsed
     self:ApplySize(); self:Refresh(true)
 end
@@ -435,7 +636,7 @@ function UI:Build()
     self.frame = f
     f:SetMovable(true); f:SetClampedToScreen(true); f:SetScale(db.scale)
 
-    self.body = CreateFrame("Frame", nil, f)
+    self.body = CreateFrame("Frame", nil, f, "SecureHandlerBaseTemplate")
     self.body:SetWidth(KB:RowUnits() * UNIT)
 
     -- Edit chrome: panel + header, only visible while the settings window is open.
@@ -461,7 +662,7 @@ function UI:Build()
     self.layerBtn = headerButton(chrome, 56, function()
         local i = 1
         for n, l in ipairs(LAYERS) do if l == UI.pinned then i = n end end
-        UI.pinned = LAYERS[i % #LAYERS + 1]; UI:Refresh(true)
+        UI.pinned = LAYERS[i % #LAYERS + 1]; UI:SyncPinned(); UI:Refresh(true)
     end)
     self.layerBtn:SetPoint("RIGHT", self.viewBtn, "LEFT", -2, 0)
     chrome:Hide()
@@ -476,10 +677,24 @@ function UI:Build()
                 k:SetSize(def.w * UNIT - GAP(), UNIT - GAP())
                 k.visible = true
                 keys[#keys + 1] = k
+                k.idx = #keys
                 table.insert(rowOf[r], k)
             end
         end
     end
+
+    self.trayFrame = CreateFrame("Frame", nil, f)
+    self.trayFrame:SetSize(1, 1)
+    self.trayFrame:SetFrameLevel(f:GetFrameLevel() + 5)
+    self.tray = {}
+    for i, k in ipairs(keys) do
+        local tk = createKey(self.trayFrame, k.def, true)
+        tk:SetSize(KB:KeyW(k.def) * UNIT - GAP(), UNIT - GAP())
+        tk:SetAlpha(0)
+        tk.lit = false
+        self.tray[i] = tk
+    end
+    self.trayFrame:Hide()
 
     self.body:SetHeight(#KB.ROWS * UNIT)
     f:SetSize(KB:RowUnits() * UNIT, #KB.ROWS * UNIT)
@@ -488,6 +703,7 @@ function UI:Build()
         db.pos = { x = x, bottom = 150, top = 150 + f:GetHeight() }
     end
     self:PlaceFrame()
+    self:BuildSecure()
 
     local elapsed = 0
     f:SetScript("OnUpdate", function(_, dt)

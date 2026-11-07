@@ -24,6 +24,7 @@ end
 function KB:BlankKey(kf) clearAttrs(kf) end -- used while the cursor holds something
 
 function KB:ApplyBindings()
+    if KB.UI then KB.UI.rev = (KB.UI.rev or 0) + 1 end -- layouts depend on what is bound
     if InCombatLockdown() then self.pendingApply = true; KB.Debug:Log("bindings", "deferred (combat)"); return end
     self.pendingApply = false
     ClearOverrideBindings(self.owner)
@@ -49,7 +50,7 @@ function KB:ApplyBindings()
         for _, kf in ipairs(self.keyFrames) do
             for _, l in ipairs(LAYERS) do
                 local bk = l[1] .. kf.def.id
-                if not keys[bk] and bk ~= self.db.ui.cycleKey and self.isHiddenBarAction(GetBindingAction(bk)) then
+                if not keys[bk] and not self:IsCycleKey(bk) and self.isHiddenBarAction(GetBindingAction(bk)) then
                     SetOverrideBindingClick(self.owner, true, bk, "KeyboardBarNoopBtn", "LeftButton")
                 end
             end
@@ -58,15 +59,18 @@ function KB:ApplyBindings()
     self.lastApply = GetTime()
     self:ApplySysClicks()
     -- Default view-cycle key (tilde) unless you put an action on it. Plain insecure button: it only changes display.
-    local ck = self.db.ui.cycleKey
-    if ck and ck ~= "" and not keys[ck] then
-        SetOverrideBindingClick(self.owner, true, ck, "KeyboardBarCycleBtn", "LeftButton")
+    local cks = { self.db.ui.cycleKey, self.db.ui.cycleKey2 == nil and "\\" or self.db.ui.cycleKey2 }
+    for _, ck in ipairs(cks) do
+        if ck and ck ~= "" and not keys[ck] then
+            -- Goes through the cycle key's own (secure) button when it has one: that path fires once per press.
+            local target = "KeyboardBarCycleHdr"
+            for _, kf in ipairs(self.keyFrames) do if kf.def.id == ck then target = kf:GetName() end end
+            SetOverrideBindingClick(self.owner, true, ck, target, "LeftButton")
+        end
     end
 end
 
 CreateFrame("Button", "KeyboardBarNoopBtn", UIParent)
-local cycleBtn = CreateFrame("Button", "KeyboardBarCycleBtn", UIParent)
-cycleBtn:SetScript("OnClick", function() if KB.UI and KB.UI.frame then KB.UI:CycleView() end end)
 
 -- Cursor <-> action ---------------------------------------------------------
 local function spellName(id) return C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(id) or (GetSpellInfo and GetSpellInfo(id)) end
@@ -315,7 +319,10 @@ function KB:ApplySysClicks()
         local anySys = false
         for _, l in ipairs(LAYERS) do
             local bk = l[1] .. kf.def.id
-            if not keys[bk] then
+            if not keys[bk] and l[1] == "" and self:IsCycleKey(kf.def.id) and self.UI and self.UI.hdr then
+                -- the view-cycle key: a secure click on the layout header, so it works (and re-lays-out) in combat
+                kf:SetAttribute("type1", "click"); kf:SetAttribute("clickbutton1", self.UI.hdr); kf:SetAttribute("macrotext1", nil)
+            elseif not keys[bk] then
                 local sa = self:GetSystemAction(bk)
                 local btn = self:SysButton(sa)
                 if btn then

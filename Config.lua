@@ -81,6 +81,8 @@ function C:Build()
     cycleButton(f, y, "Key style",
         function() return ui().style == "blizzard" and "Blizzard slots" or "Flat" end,
         function() ui().style = ui().style == "blizzard" and "flat" or "blizzard"; relayout() end); step()
+    checkbox(f, y, "Show key borders", function() return ui().borders ~= false end,
+        function(v) ui().borders = v end); step()
     cycleButton(f, y, "Row anchor",
         function() return ui().anchor == "bottom" and "Bottom edge" or "Top edge" end,
         function() KB.UI:SetAnchor(ui().anchor == "bottom" and "top" or "bottom") end); step()

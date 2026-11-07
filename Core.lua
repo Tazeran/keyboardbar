@@ -14,6 +14,14 @@ function KeyboardBar_CycleView() if KB.UI.frame then KB.UI:CycleView() end end
 function KeyboardBar_Toggle() if KB.UI.frame then KB.UI:Toggle() end end
 function KeyboardBar_Collapse() if KB.UI.frame then KB.UI:ToggleCollapse() end end
 
+-- View-cycle keys: the main one (default ~) plus a backup (default \) for people who put an ability on ~.
+function KB:IsCycleKey(id)
+    local u = self.db.ui
+    local second = u.cycleKey2
+    if second == nil then second = "\\" end
+    return id ~= nil and id ~= "" and (id == u.cycleKey or id == second)
+end
+
 local DEFAULTS = { scale = 1, view = "full", collapsed = false, showNames = false, anchor = "top", keepPositions = false, cycleKey = "`", gap = 3, sizeMode = "keyboard", style = "flat", showNav = true, showNumpad = true, hideBars = true, point = { "CENTER", "UIParent", "CENTER", 0, -200 } }
 
 local function charKey() return UnitName("player") .. "-" .. GetRealmName() end
@@ -71,6 +79,7 @@ ev:SetScript("OnEvent", function(_, event)
         KB:HideBlizzardBars()
     elseif event == "UPDATE_BINDINGS" then
         if KB.WipeSystemCache then KB:WipeSystemCache() end
+        if KB.UI then KB.UI.rev = (KB.UI.rev or 0) + 1 end
         -- re-apply (bar keys may have been rebound); ignore the echo of our own override changes
         if KB.UI and KB.UI.frame and not (KB.lastApply and GetTime() - KB.lastApply < 1) then KB:ApplyBindings() end
     elseif event == "PLAYER_REGEN_ENABLED" then

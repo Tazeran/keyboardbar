@@ -67,7 +67,7 @@ function C:Build()
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -12); title:SetText("Keyboard Bar")
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("TOP", 0, -32); hint:SetText("Drag keys with right mouse (or left, here). /kb closes.")
+    hint:SetPoint("TOP", 0, -32); hint:SetText("Right-click uses a key; right-hold and drag moves it. /kb closes.")
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -2, -2)
 
@@ -122,6 +122,26 @@ function C:Build()
         function(v) ui().alwaysShowCycle = v; KB.UI:Refresh(true) end); step()
     checkbox(f, y, "Show profession skill (45/75) on keys", function() return ui().skillNumbers ~= false end,
         function(v) ui().skillNumbers = v; KB.UI:Refresh(true) end); step()
+    checkbox(f, y, "Auto-place newly learned abilities on a free key", function() return ui().autoPlace ~= false end,
+        function(v) ui().autoPlace = v end); step()
+    checkbox(f, y, "   ...search from the bottom row up (default: top down)", function() return ui().autoFromBottom == true end,
+        function(v) ui().autoFromBottom = v end); step()
+    checkbox(f, y, "Key effects (sparkle / glow)", function() return ui().fxOn ~= false end,
+        function(v) ui().fxOn = v end); step()
+    checkbox(f, y, "   New ability: sparkle + glow until hovered", function() return ui().fxNewSpell ~= false end,
+        function(v) ui().fxNewSpell = v end); step()
+    checkbox(f, y, "   New rank: quick sparkle", function() return ui().fxNewRank ~= false end,
+        function(v) ui().fxNewRank = v end); step()
+    checkbox(f, y, "   Cooldown ready: flash", function() return ui().fxReady ~= false end,
+        function(v) ui().fxReady = v end); step()
+    checkbox(f, y, "   Out of range / mana: red / blue flash", function() return ui().fxRange ~= false end,
+        function(v) ui().fxRange = v end); step()
+    checkbox(f, y, "   Active spell: glow", function() return ui().fxActive ~= false end,
+        function(v) ui().fxActive = v end); step()
+    checkbox(f, y, "Dropping an icon off the keys removes it (else it returns)", function() return ui().dropRemoves ~= false end,
+        function(v) ui().dropRemoves = v end); step()
+    checkbox(f, y, "Right-drag works in every view (pops open Full while moving)", function() return ui().dragAnyView ~= false end,
+        function(v) ui().dragAnyView = v end); step()
     checkbox(f, y, "Hide Blizzard action bars (reload to undo)", function() return ui().hideBars end,
         function(v) ui().hideBars = v; if v then KB:HideBlizzardBars() else KB:Print("Blizzard bars return after /reload.") end end); step()
 
@@ -150,6 +170,11 @@ function C:Build()
     clear:SetSize(150, 22); clear:SetPoint("TOPRIGHT", -16, y + 4); clear:SetText("Clear all keys")
     clear:SetScript("OnClick", function() StaticPopup_Show("KEYBOARDBAR_CLEAR") end)
     layoutWidgets[#layoutWidgets + 1] = new; layoutWidgets[#layoutWidgets + 1] = clear
+    step()
+    local fill = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    fill:SetSize(308, 22); fill:SetPoint("TOPLEFT", 16, y + 4); fill:SetText("Fill in missing class abilities")
+    fill:SetScript("OnClick", function() KB:FillMissing() end)
+    layoutWidgets[#layoutWidgets + 1] = fill
 
     f:SetHeight(-y + 40)
     f:SetScript("OnShow", function() C:Refresh(); KB.UI:SetEditMode(true) end)

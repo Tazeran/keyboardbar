@@ -3,8 +3,16 @@ local ADDON, KB = ...
 
 -- Storage -------------------------------------------------------------------
 function KB:GetAction(bk) return self:Profile().keys[bk] end
-function KB:SetAction(bk, a) self:Profile().keys[bk] = a; self:ApplyBindings() end
-function KB:ClearAction(bk) self:Profile().keys[bk] = nil; self:ApplyBindings() end
+function KB:SetAction(bk, a)
+    self:Profile().keys[bk] = a
+    if a then self:BumpSystem(bk) else self:UnbumpSystem(bk) end
+    self:ApplyBindings()
+end
+function KB:ClearAction(bk)
+    self:Profile().keys[bk] = nil
+    self:UnbumpSystem(bk)
+    self:ApplyBindings()
+end
 
 -- Secure keys ---------------------------------------------------------------
 -- Each visual key is itself a SecureActionButton (like Blizzard action buttons), so clicking it
@@ -18,6 +26,8 @@ local function clearAttrs(kf)
         local p = l[2]
         kf:SetAttribute(p .. "type1", "") -- explicit empty type: a modifier click does nothing
         kf:SetAttribute(p .. "spell1", nil); kf:SetAttribute(p .. "item1", nil); kf:SetAttribute(p .. "macro1", nil)
+        kf:SetAttribute(p .. "type2", "")
+        kf:SetAttribute(p .. "spell2", nil); kf:SetAttribute(p .. "item2", nil); kf:SetAttribute(p .. "macro2", nil)
     end
 end
 
@@ -38,9 +48,17 @@ function KB:ApplyBindings()
             local a = keys[l[1] .. kf.def.id]
             if a then
                 local p = l[2]
-                if a.type == "spell" then kf:SetAttribute(p .. "type1", "spell"); kf:SetAttribute(p .. "spell1", a.name)
-                elseif a.type == "item" then kf:SetAttribute(p .. "type1", "item"); kf:SetAttribute(p .. "item1", "item:" .. a.id)
-                elseif a.type == "macro" then kf:SetAttribute(p .. "type1", "macro"); kf:SetAttribute(p .. "macro1", a.name) end
+                -- Right-click does the same as left-click (on release only: see useOnKeyDown2 in createKey).
+                if a.type == "spell" then
+                    kf:SetAttribute(p .. "type1", "spell"); kf:SetAttribute(p .. "spell1", a.name)
+                    kf:SetAttribute(p .. "type2", "spell"); kf:SetAttribute(p .. "spell2", a.name)
+                elseif a.type == "item" then
+                    kf:SetAttribute(p .. "type1", "item"); kf:SetAttribute(p .. "item1", "item:" .. a.id)
+                    kf:SetAttribute(p .. "type2", "item"); kf:SetAttribute(p .. "item2", "item:" .. a.id)
+                elseif a.type == "macro" then
+                    kf:SetAttribute(p .. "type1", "macro"); kf:SetAttribute(p .. "macro1", a.name)
+                    kf:SetAttribute(p .. "type2", "macro"); kf:SetAttribute(p .. "macro2", a.name)
+                end
                 SetOverrideBindingClick(self.owner, true, l[1] .. kf.def.id, kf:GetName(), "LeftButton")
             end
         end
@@ -58,10 +76,6 @@ function KB:ApplyBindings()
     end
     self.lastApply = GetTime()
     self:ApplySysClicks()
-    -- Arrange mode (settings window open): keys are inert so dragging/clicking can't cast anything.
-    if self.UI and self.UI.edit then
-        for _, kf in ipairs(self.keyFrames) do clearAttrs(kf) end
-    end
     -- Default view-cycle key (tilde) unless you put an action on it. Plain insecure button: it only changes display.
     local cks = { self.db.ui.cycleKey, self.db.ui.cycleKey2 == nil and "\\" or self.db.ui.cycleKey2 }
     for _, ck in ipairs(cks) do
@@ -167,7 +181,7 @@ local SHORT = {
     TOGGLESPELLBOOK = "Spells", TOGGLETALENTS = "Talents", TOGGLEQUESTLOG = "Quests", TOGGLESOCIAL = "Social",
     TOGGLEGAMEMENU = "Menu", OPENCHAT = "Chat", REPLY = "Reply", NEXTVIEW = "Zoom+", PREVVIEW = "Zoom-",
     TARGETNEARESTENEMY = "Tgt", INTERACTTARGET = "Interact", TOGGLEMINIMAP = "Mini", TOGGLEFPS = "FPS",
-    SCREENSHOT = "Screen", TOGGLEPETBOOK = "Pet", TOGGLEGUILDTAB = "Guild", TOGGLECHARACTER4 = "PvP", TOGGLEPROFESSIONBOOK = "Prof", TOGGLEFRIENDSTAB = "Friends",
+    SCREENSHOT = "Screen", TOGGLEPETBOOK = "Pet", TOGGLEGUILDTAB = "Guild", TOGGLECHARACTER4 = "PvP", TOGGLEPROFESSIONBOOK = "Prof", TOGGLEFRIENDSTAB = "Friends", TOGGLEGROUPFINDER = "Finder",
 }
 local BLUE, GREY, BAR = { 0.1, 0.25, 0.5 }, { 0.2, 0.3, 0.3 }, { 0.2, 0.2, 0.25 }
 
@@ -196,6 +210,48 @@ function KB:MoveSystemBinding(from, to)
     KB.Debug:Log("rebind", ("%s %s -> %s saved=%s %s"):format(a, from, to, tostring(ok), ok and "" or tostring(err)))
     self:WipeSystemCache()
     self:Print(("%s moved to %s%s"):format((self:SystemInfo(a)), to, ok and "" or " (not saved: confirm in Key Bindings)"))
+end
+
+-- When one of your actions lands on a key that has a game binding (Map, Talents, Sit...), the game binding is
+-- moved to the same key with ALT held, so nothing is lost. When the base key becomes free again it moves back.
+local function bindingFree(key)
+    local v = GetBindingAction(key)
+    return v == nil or v == "" or KB.isHiddenBarAction(v)
+end
+
+function KB:BumpSystem(bk)
+    if InCombatLockdown() or bk:match("^[A-Z]+%-.+") then return end -- base layer only
+    local sys = GetBindingAction(bk)
+    if not sys or sys == "" or self.isHiddenBarAction(sys) then return end
+    local alt = "ALT-" .. bk
+    if not bindingFree(alt) or self:GetAction(alt) then
+        self:Print(("%s stays on %s: ALT-%s is already in use."):format((self:SystemInfo(sys)), bk, bk))
+        return
+    end
+    SetBinding(alt, sys)
+    SetBinding(bk)
+    local ok = pcall(function() SaveBindings(GetCurrentBindingSet()) end)
+    self.db.bumped = self.db.bumped or {}
+    self.db.bumped[bk] = sys
+    KB.Debug:Log("bump", ("%s %s -> %s saved=%s"):format(sys, bk, alt, tostring(ok)))
+    self:WipeSystemCache()
+    self:Print(("%s moved to ALT-%s."):format((self:SystemInfo(sys)), bk))
+end
+
+function KB:UnbumpSystem(bk)
+    local b = self.db.bumped
+    local sys = b and b[bk]
+    if not sys or InCombatLockdown() then return end
+    if self:GetAction(bk) then return end -- still occupied
+    local alt = "ALT-" .. bk
+    b[bk] = nil
+    if GetBindingAction(alt) ~= sys or not bindingFree(bk) then return end -- changed behind our back: leave it
+    SetBinding(bk, sys)
+    SetBinding(alt)
+    local ok = pcall(function() SaveBindings(GetCurrentBindingSet()) end)
+    KB.Debug:Log("unbump", ("%s %s -> %s saved=%s"):format(sys, alt, bk, tostring(ok)))
+    self:WipeSystemCache()
+    self:Print(("%s moved back to %s."):format((self:SystemInfo(sys)), bk))
 end
 
 -- Remove the game binding on a key (middle-click on a system key).
@@ -254,6 +310,7 @@ KB.SYS_ICON = {
     TOGGLEPROFESSIONBOOK = I .. "Trade_BlackSmithing",
     TOGGLESOCIAL = { I .. "INV_Letter_03", I .. "INV_Misc_GroupNeedMore", I .. "INV_Misc_Note_02" },
     TOGGLEFRIENDSTAB = { I .. "INV_Letter_03", I .. "INV_Misc_GroupNeedMore" },
+    TOGGLEGROUPFINDER = { I .. "INV_Misc_GroupLooking", I .. "INV_Misc_GroupNeedMore", I .. "Spell_Holy_PrayerOfHealing" },
     TOGGLECHARACTER4 = { I .. "Achievement_Arena_2v2_1", I .. "Achievement_PVP_A_01", I .. "INV_Misc_Bone_HumanSkull_01" },
 }
 
@@ -396,4 +453,128 @@ pcall(sk.RegisterEvent, sk, "CHAT_MSG_SKILL")
 sk:SetScript("OnEvent", function()
     skills = nil
     if KB.UI and KB.UI.Refresh then KB.UI.rev = (KB.UI.rev or 0) + 0; KB.UI:Refresh(true) end
+end)
+
+-- Auto-place newly learned abilities ------------------------------------------------------------
+-- When a spell name appears in the spellbook that wasn't there before (a new ability's first rank; later
+-- ranks keep the same name), it goes on the first free key in the main block, searching from the top row
+-- down (or the bottom row up, per the setting). Free = nothing assigned and no game binding showing.
+local function knownSpells(classOnly)
+    local t, order = {}, {}
+    local skipLine = classOnly and 1 or nil -- the General tab (professions, racials...) isn't "class abilities"
+    local function add(name, passive)
+        if name and not passive and not t[name] then
+            local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(name)
+            t[name] = (info and info.spellID) or true -- the id changes when a new rank is learned
+            order[#order + 1] = name
+        end
+    end
+    pcall(function()
+        if C_SpellBook and C_SpellBook.GetNumSpellBookSkillLines and C_SpellBook.GetSpellBookSkillLineInfo then
+            local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+            for line = 1, C_SpellBook.GetNumSpellBookSkillLines() do
+                local info = C_SpellBook.GetSpellBookSkillLineInfo(line)
+                if info and line ~= skipLine then
+                    for i = (info.itemIndexOffset or 0) + 1, (info.itemIndexOffset or 0) + (info.numSpellBookItems or 0) do
+                        local it = C_SpellBook.GetSpellBookItemInfo(i, bank)
+                        if it and (not Enum.SpellBookItemType or it.itemType == Enum.SpellBookItemType.Spell) then add(it.name, it.isPassive) end
+                    end
+                end
+            end
+        end
+    end)
+    pcall(function()
+        if next(t) == nil and GetNumSpellTabs and GetSpellTabInfo and GetSpellBookItemName then
+            for tab = 1, GetNumSpellTabs() do
+                local _, _, off, n = GetSpellTabInfo(tab)
+                if tab == skipLine then n = 0 end
+                for i = off + 1, off + n do
+                    local name = GetSpellBookItemName(i, "spell")
+                    add(name, IsPassiveSpell and IsPassiveSpell(i, "spell"))
+                end
+            end
+        end
+    end)
+    return t, order
+end
+
+function KB:FreeKeys()
+    local list = {}
+    for _, row in ipairs(self.ROWS) do
+        for _, d in ipairs(row) do
+            if d.id and not d.fixed and not d.group and not self:IsCycleKey(d.id) then list[#list + 1] = d.id end
+        end
+    end
+    if self.db.ui.autoFromBottom then
+        local r = {}
+        for i = #list, 1, -1 do r[#r + 1] = list[i] end
+        list = r
+    end
+    return list
+end
+
+function KB:AutoPlace(name, quiet)
+    local keys = self:Profile().keys
+    for _, a in pairs(keys) do if a.type == "spell" and a.name == name then return false, "have" end end -- already on a key
+    for _, id in ipairs(self:FreeKeys()) do
+        if not keys[id] and not self:GetSystemAction(id) then
+            local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(name)
+            keys[id] = { type = "spell", id = info and info.spellID, name = name }
+            if not quiet then
+                self:Print(("Learned %s: placed on %s."):format(name, id))
+                if self.FX then self.FX:Queue(id, "newspell") end
+            end
+            return true
+        end
+    end
+    if not quiet then self:Print(("Learned %s: no free key to place it on."):format(name)) end
+    return false, "full"
+end
+
+-- Put every class ability that isn't on the keyboard yet onto free keys (same search order as new abilities).
+function KB:FillMissing()
+    if InCombatLockdown() then self:Print("Can't do that in combat."); return end
+    local _, order = knownSpells(true)
+    if #order == 0 then self:Print("Couldn't read your spellbook."); return end
+    local placed, full = 0, 0
+    for _, name in ipairs(order) do
+        local ok, why = self:AutoPlace(name, true)
+        if ok then placed = placed + 1 elseif why == "full" then full = full + 1 end
+    end
+    if placed > 0 then self:ApplyBindings(); if self.UI and self.UI.Refresh then self.UI:Refresh(true) end end
+    self:Print(("Placed %d ability(ies) on free keys.%s"):format(placed, full > 0 and (" %d had no free key."):format(full) or ""))
+end
+
+function KB:CheckNewSpells()
+    if not self.db then return end
+    if InCombatLockdown() then self.pendingSpells = true; return end
+    self.pendingSpells = false
+    local now = knownSpells()
+    if next(now) == nil then return end -- spellbook not ready
+    local cd = self:CharData()
+    local old = cd.known
+    cd.known = now
+    if not old then return end -- first run on this character: just remember what's there
+    local placed = false
+    for name, sid in pairs(now) do
+        if not old[name] then
+            if self.db.ui.autoPlace ~= false and self:AutoPlace(name) then placed = true end
+        elseif sid ~= true and old[name] ~= true and old[name] ~= sid and self.FX then
+            -- same ability, new rank: sparkle the key(s) that hold it
+            for bk, a in pairs(self:Profile().keys) do
+                if a.type == "spell" and a.name == name then self.FX:Queue(bk, "newrank") end
+            end
+        end
+    end
+    if placed then self:ApplyBindings(); if self.UI and self.UI.Refresh then self.UI:Refresh(true) end end
+end
+
+local ap = CreateFrame("Frame")
+ap:RegisterEvent("PLAYER_LOGIN")
+ap:RegisterEvent("SPELLS_CHANGED")
+ap:RegisterEvent("PLAYER_REGEN_ENABLED")
+ap:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_LOGIN" then C_Timer.After(3, function() KB:CheckNewSpells() end)
+    elseif event == "PLAYER_REGEN_ENABLED" then if KB.pendingSpells then KB:CheckNewSpells() end
+    else C_Timer.After(0.5, function() KB:CheckNewSpells() end) end
 end)

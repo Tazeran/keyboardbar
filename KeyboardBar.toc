@@ -10,5 +10,6 @@ Debug.lua
 Layout.lua
 Bars.lua
 Actions.lua
+Effects.lua
 UI.lua
 Config.lua

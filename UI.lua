@@ -32,6 +32,61 @@ local function receive(k)
     ClearCursor()
     if old then KB:PickupAction(old) end
     UI:Refresh(true)
+    UI:RestoreView()
+end
+
+-- An icon pulled off a key and let go somewhere that isn't a key. By default it is removed (the key goes back
+-- to its default binding, like pulling a spell off a Blizzard bar); the setting can put it back instead.
+function UI:SettleDrag(src)
+    src = src or self.dragSrc
+    if not src or self.dragSrc ~= src then return end -- already dropped on a key
+    self.dragSrc = nil
+    if InCombatLockdown() then return end
+    if GetCursorInfo() then ClearCursor() end
+    if KB.db.ui.dropRemoves == false then
+        KB:SetAction(src.bk, src.action)
+    else
+        KB:Print(("Removed %s from %s."):format(src.action.name or "?", src.bk))
+    end
+    self:Refresh(true)
+    self:RestoreView()
+end
+
+-- Pulling an icon off a key in any view (when allowed) pops the Full keyboard open for the move, then goes back.
+function UI:BeginDragView()
+    if KB.db.ui.view == "full" then return true end
+    if KB.db.ui.dragAnyView == false then return false end
+    if InCombatLockdown() then return false end
+    self.dragPrevView = KB.db.ui.view
+    self:SetView("full")
+    return true
+end
+
+function UI:RestoreView()
+    local v = self.dragPrevView
+    if not v then return end
+    if InCombatLockdown() then return end -- try again when this is next called; the view just stays Full meanwhile
+    self.dragPrevView = nil
+    if KB.db.ui.view ~= v then self:SetView(v) end
+end
+
+-- Safety net: if the release was missed, the next click (or the mouse being up) settles the drag.
+do
+    local w = CreateFrame("Frame")
+    local up = 0
+    w:SetScript("OnUpdate", function(_, dt)
+        if not UI.dragSrc then up = 0; return end
+        if IsMouseButtonDown("RightButton") or IsMouseButtonDown("LeftButton") then up = 0; return end
+        up = up + dt
+        if up > 0.3 and not MouseIsOver(UI.frame or UIParent) then up = 0; UI:SettleDrag() end
+    end)
+    pcall(function()
+        w:RegisterEvent("GLOBAL_MOUSE_DOWN")
+        w:SetScript("OnEvent", function()
+            local src = UI.dragSrc
+            if src and not (UI.frame and MouseIsOver(UI.frame)) then C_Timer.After(0.05, function() UI:SettleDrag(src) end) end
+        end)
+    end)
 end
 
 local function createKey(parent, def, display)
@@ -71,7 +126,10 @@ local function createKey(parent, def, display)
     k.arrow:SetSize(18, 18); k.arrow:SetPoint("CENTER", 0, 3); k.arrow:Hide()
     k.count = over:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     k.count:SetPoint("BOTTOMRIGHT", -2, 2)
+    if KB.FX then KB.FX:Attach(k) end
     if display then k:EnableMouse(false); return k end
+    k:HookScript("OnEnter", function(self) if KB.FX then KB.FX:Dismiss(self.def.id) end end)
+    k:HookScript("PostClick", function(self) if KB.FX then KB.FX:Dismiss(self.def.id) end end)
     k:RegisterForDrag("LeftButton", "RightButton")
     k:SetScript("OnReceiveDrag", receive)
     -- HookScript so the secure click handler (the actual cast) is kept.
@@ -103,11 +161,10 @@ local function createKey(parent, def, display)
     end)
     k:SetScript("OnDragStart", function(self, button)
         if InCombatLockdown() then return end
-        -- Right-drag never casts (keys only have a left-click action). Left-drag is only for arrange mode
-        -- (settings window open), where clicking keys is switched off.
-        if button ~= "RightButton" and not UI.edit then return end
-        if KB.db.ui.view ~= "full" then
-            -- Rearranging is only allowed in the Full view, so a stray drag while playing can't pull anything off.
+        -- Right-drag never casts (keys only have a left-click action), so only it moves keys.
+        if button ~= "RightButton" then return end
+        if not UI:BeginDragView() then
+            -- Rearranging is only allowed in the Full view (setting off), so a stray drag while playing can't pull anything off.
             if self.action or self.sys then KB:Print("Switch to the Full view to move keys around.") end
             return
         end
@@ -126,13 +183,7 @@ local function createKey(parent, def, display)
         if UI.dragSys then UI:StopSystemDrag() end
         local src = UI.dragSrc
         if src then
-            -- Dragged off a key and released somewhere that isn't a key: put it back where it came from.
-            C_Timer.After(0.1, function()
-                if UI.dragSrc ~= src then return end -- it was dropped on a key meanwhile
-                UI.dragSrc = nil
-                if GetCursorInfo() then ClearCursor() end
-                KB:SetAction(src.bk, src.action); UI:Refresh(true)
-            end)
+            C_Timer.After(0.1, function() UI:SettleDrag(src) end)
         end
     end)
     k:SetScript("OnEnter", function(self)
@@ -189,6 +240,7 @@ local function style(k, a, s, sys)
         local label, rot, tint = KB:SystemInfo(sys)
         k.count:SetText(""); k.cd:Clear(); k.cdText:SetText("")
         local ico = KB:SystemIcon(sys)
+        k.icon:SetDesaturated(false)
         if ico then k.icon:SetTexture(ico); k.icon:SetVertexColor(0.9, 0.9, 0.9); k.icon:Show() else k.icon:Hide() end
         k.name:SetText(label)
         k.arrow:SetShown(rot ~= nil)
@@ -199,6 +251,7 @@ local function style(k, a, s, sys)
     end
     k.arrow:Hide()
     if not a then
+        if KB.FX then KB.FX:SetGlow(k, false); k.fxName = nil end
         k.icon:Hide(); k.name:SetText(""); k.count:SetText(""); k.cd:Clear(); k.cdText:SetText("")
         paint(k, { 0.08, 0.08, 0.1, k.def.fixed and 0.35 or 0.8 }, { 0.3, 0.3, 0.35, 1 })
         k.label:SetAlpha(k.def.fixed and 0.4 or 1)
@@ -207,15 +260,19 @@ local function style(k, a, s, sys)
     k.label:SetAlpha(1)
     k.icon:SetTexture(s.icon); k.icon:Show()
     k.name:SetText(KB.db.ui.showNames and a.name or "")
-    local okc, many = pcall(function() return s.count and s.count > 1 end)
+    local okc, many = pcall(function() return s.count and (s.count > 1 or (a.type == "item" and s.count == 0)) end)
     k.count:SetText((okc and many) and s.count or "")
+    local empty = false
+    pcall(function() empty = (a.type == "item" and s.count == 0) end)
+    k.icon:SetDesaturated(empty)
     if a.type == "spell" then
         local st = KB:SkillText(a.name)
         if st then k.count:SetText(st) end
     end
     local r, g, b = 1, 1, 1
     pcall(function()
-        if s.usable == false then r, g, b = 0.4, 0.4, 0.4
+        if empty then r, g, b = 0.45, 0.45, 0.45
+        elseif s.usable == false then r, g, b = 0.4, 0.4, 0.4
         elseif s.nomana then r, g, b = 0.4, 0.4, 1
         elseif s.range == false then r, g, b = 1, 0.3, 0.3 end
     end)
@@ -257,6 +314,7 @@ local function style(k, a, s, sys)
     pcall(function() casting = s.cast ~= nil and s.cast == s.castName; active = s.active and true or false end)
     if casting then bd = { 0.2, 1, 0.2, 1, state = true } elseif active then bd = { 1, 0.9, 0.2, 1, state = true } end
     paint(k, { 0, 0, 0, 1 }, bd)
+    if KB.FX then pcall(KB.FX.Observe, KB.FX, k, a, s) end
 end
 
 local function wanted(view, a, s, sys)
@@ -458,6 +516,19 @@ function UI:BuildSecure()
     hdr:SetAttribute("nkeys", #keys)
     hdr:SetAttribute("view", KB.db.ui.view)
     hdr:SetAttribute("layer", "B")
+    -- Keys fire on press (like the bars), but a right-click must fire only when the button is released (and,
+    -- like any button, only if the mouse is still over it), so a right-hold can pull the icon off without
+    -- casting it. The secure template decides press-vs-release from the key's "useOnKeyDown" attribute, so this
+    -- wrapper flips it just before each click is handled: release-only for the right button, default otherwise.
+    for _, k in ipairs(keys) do
+        SecureHandlerWrapScript(k, "OnClick", hdr, [=[
+            if button == "RightButton" then
+                self:SetAttribute("useOnKeyDown", false)
+            else
+                self:SetAttribute("useOnKeyDown", nil)
+            end
+        ]=])
+    end
     RegisterStateDriver(hdr, "layer",
         "[mod:shift,nomod:ctrl,nomod:alt] S; [mod:ctrl,nomod:shift,nomod:alt] C; [mod:alt,nomod:shift,nomod:ctrl] A; [nomod] B; X")
 end
@@ -540,7 +611,6 @@ end
 
 function UI:SetEditMode(on)
     self.edit = on and true or false
-    KB:ApplyBindings() -- while editing, clicking/pressing keys is switched off so nothing casts mid-arrangement
     self.chrome:SetShown(self.edit)
     if self.edit and not self.frame:IsShown() then self.frame:Show() end
     self:ApplySize()
@@ -588,6 +658,9 @@ function UI:Refresh(force)
                     local g = s.gcd
                     if g ~= nil and issecretvalue and issecretvalue(g) then g = false end
                     on = (tk.cd:IsShown() and not g) and true or false
+                    -- Items don't report the global cooldown flag: a short readable cooldown is just the GCD.
+                    local d = s.dur
+                    if on and d ~= nil and not (issecretvalue and issecretvalue(d)) and d <= 1.5 then on = false end
                 end)
                 tk.lit = on
                 tk:SetAlpha(on and 1 or 0)
@@ -599,6 +672,7 @@ function UI:Refresh(force)
         end
     end
     self:LayoutTray(view)
+    if KB.FX then KB.FX:Flush(keys, self.tray) end
     local u = KB.db.ui
     self:Reflow(table.concat({ view, self.layer, tostring(KB:RowUnits()), u.sizeMode, u.style, GAP(), tostring(u.keepPositions),
         tostring(u.alwaysShowCycle), tostring(u.showNav), tostring(u.showNumpad), u.anchor, self.rev or 0 }, "|"))
@@ -628,13 +702,15 @@ function UI:StopSystemDrag()
     local d = UI.dragSys
     UI.dragSys = nil
     if ghost then ghost:Hide() end
-    if not d or InCombatLockdown() then return end
+    if not d or InCombatLockdown() then self:RestoreView(); return end
     for _, k in ipairs(keys) do
         if k ~= d.from and k.visible and not k.def.fixed and k:IsMouseOver() then
             KB:MoveSystemBinding(d.bk, bindKey(k)); self:Refresh(true)
+            self:RestoreView()
             return
         end
     end
+    self:RestoreView()
 end
 
 -- Build ---------------------------------------------------------------------

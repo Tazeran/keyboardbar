@@ -71,7 +71,8 @@ local FRAMES = { "MainActionBar", "MainMenuBar", "MultiBarBottomLeft", "MultiBar
     "MultiBar5", "MultiBar6", "MultiBar7", "StanceBar", "PetActionBar", "PossessActionBar", "OverrideActionBar",
     "MicroMenu", "MicroButtonAndBagsBar", "ActionButton1", "MainMenuBarArtFrame", "BagsBar" }
 local TEXTURES = { "Interface\\Buttons\\UI-Quickslot", "Interface\\Buttons\\UI-Quickslot2", "Interface\\ChatFrame\\ChatFrameExpandArrow",
-    "Interface\\Buttons\\ButtonHilight-Square", "Interface\\Buttons\\UI-Quickslot-Depress" }
+    "Interface\\Buttons\\ButtonHilight-Square", "Interface\\Buttons\\UI-Quickslot-Depress",
+    "Interface\\Buttons\\UI-ActionButton-Border", "Interface\\Cooldown\\star4", "Interface\\Cooldown\\ping4" }
 
 function D:Snapshot(reason)
     if not KB.db then return end
@@ -79,6 +80,10 @@ function D:Snapshot(reason)
     local ver, build, _, toc = GetBuildInfo()
     s.client = { version = ver, build = build, toc = toc }
     s.profile = KB:ProfileName()
+    s.names = { UnitName = (UnitName("player")), GetUnitName = tostring((GetUnitName and GetUnitName("player", false))),
+        GetUnitNameRealm = tostring((GetUnitName and GetUnitName("player", true))), UnitGUID = tostring(UnitGUID and UnitGUID("player")),
+        realm = GetRealmName() }
+    pcall(function() local n, r = UnitFullName("player"); s.names.UnitFullName = tostring(n) .. "/" .. tostring(r) end)
     s.ui = {}
     for k, v in pairs(KB.db.ui) do if type(v) ~= "table" then s.ui[k] = v end end
     s.api = {}

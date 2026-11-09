@@ -24,7 +24,61 @@ end
 
 local DEFAULTS = { scale = 1, view = "full", collapsed = false, showNames = false, anchor = "top", keepPositions = false, cycleKey = "`", gap = 3, sizeMode = "keyboard", style = "flat", showNav = true, showNumpad = true, hideBars = true, point = { "CENTER", "UIParent", "CENTER", 0, -200 } }
 
-local function charKey() return UnitName("player") .. "-" .. GetRealmName() end
+-- Characters are told apart by GUID: Forever gives characters a first AND last name, and several of
+-- yours can share the first name, which is all UnitName() returns.
+local function charKey()
+    local g = UnitGUID and UnitGUID("player")
+    if g then return g end
+    return UnitName("player") .. "-" .. GetRealmName()
+end
+
+-- Every name the client will give for the player (first/last name may come back as extra return values).
+function KB:WhoAmI()
+    local parts = {}
+    local function add(label, ...)
+        local t = {}
+        for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
+        parts[#parts + 1] = label .. "=" .. table.concat(t, " | ")
+    end
+    add("UnitName", UnitName("player"))
+    if UnitFullName then add("UnitFullName", UnitFullName("player")) end
+    if GetUnitName then add("GetUnitName", GetUnitName("player", false)); add("GetUnitName(true)", GetUnitName("player", true)) end
+    if UnitNameUnmodified then add("UnitNameUnmodified", UnitNameUnmodified("player")) end
+    -- Forever's NameUtil helpers (from the 1.60.1 API changes) are the likely source of the last name
+    if NameUtil then
+        local me = UnitName("player")
+        for _, fn in ipairs({ "GetFullNameWithoutRealm", "GetUnmodifiedUnitFullName", "GetUnitFirstName", "FormatUnitNameForDisplay" }) do
+            if NameUtil[fn] then
+                local ok, a, b = pcall(NameUtil[fn], "player")
+                parts[#parts + 1] = "NameUtil." .. fn .. "=" .. (ok and (tostring(a) .. " | " .. tostring(b)) or "error")
+            end
+        end
+        if NameUtil.SplitPlayerNameIntoParts then
+            local ok, a, b, c = pcall(NameUtil.SplitPlayerNameIntoParts, me)
+            parts[#parts + 1] = "NameUtil.SplitPlayerNameIntoParts=" .. (ok and (tostring(a) .. " | " .. tostring(b) .. " | " .. tostring(c)) or "error")
+        end
+    end
+    if C_PlayerInfo and C_PlayerInfo.ShouldDisplaySurname then add("ShouldDisplaySurname", C_PlayerInfo.ShouldDisplaySurname()) end
+    add("GUID", UnitGUID and UnitGUID("player"))
+    add("Realm", GetRealmName())
+    return parts
+end
+
+local function charLabel()
+    -- first + last name when the client reports both (UnitName's 2nd return, unless it is just the realm)
+    local first, second = UnitName("player")
+    local realm = GetRealmName()
+    local ok, nm = pcall(GetUnitName, "player", false)
+    if not ok or not nm then nm = first end
+    if second and second ~= "" and second ~= realm and not nm:find(second, 1, true) then nm = nm .. " " .. second end
+    -- Forever's own helper for the full two-part name, when the client has it
+    pcall(function()
+        local full = NameUtil and NameUtil.GetFullNameWithoutRealm and NameUtil.GetFullNameWithoutRealm("player")
+        if type(full) == "string" and full ~= "" and not (issecretvalue and issecretvalue(full)) then nm = full end
+    end)
+    local g = UnitGUID and UnitGUID("player")
+    return g and (nm .. " (" .. g:sub(-6) .. ")") or (nm .. "-" .. GetRealmName())
+end
 
 function KB:Print(msg) print("|cff66ccffKeyboardBar|r: " .. tostring(msg)) end
 
@@ -37,11 +91,15 @@ local function initDB()
     db.profiles = db.profiles or {}
     db.chars = db.chars or {}
     local ck = charKey()
-    db.chars[ck] = db.chars[ck] or { profile = ck }
+    if not db.chars[ck] then
+        db.chars[ck] = { profile = charLabel() }
+        KB.newChar = true -- first time this character is seen: it starts on a fresh, empty profile
+    end
     KB.db = db
 end
 
 -- Profiles ------------------------------------------------------------------
+function KB:CharData() return self.db.chars[charKey()] end
 function KB:ProfileName() return self.db.chars[charKey()].profile end
 
 function KB:Profile()
@@ -76,6 +134,10 @@ ev:SetScript("OnEvent", function(_, event)
         initDB()
         KB.UI:Build()
         KB:ApplyBindings()
+        if KB.newChar then
+            KB.newChar = nil
+            KB:Print("New character: starting an empty profile. Other profiles: " .. table.concat(KB:ListProfiles(), ", ") .. " (use the Profile row in /kb to switch).")
+        end
         KB:HideBlizzardBars()
     elseif event == "UPDATE_BINDINGS" then
         if KB.WipeSystemCache then KB:WipeSystemCache() end
@@ -98,6 +160,10 @@ SlashCmdList.KEYBOARDBAR = function(msg)
         KB.Config:Toggle()
     elseif cmd == "toggle" or cmd == "show" or cmd == "hide" then
         UI:Toggle()
+    elseif cmd == "fill" then
+        KB:FillMissing()
+    elseif cmd == "whoami" then
+        for _, line in ipairs(KB:WhoAmI()) do KB:Print(line) end
     elseif cmd == "view" then
         arg = arg:lower()
         if KB.VIEW_LABEL[arg] then UI:SetView(arg) else UI:CycleView() end

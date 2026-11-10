@@ -12,4 +12,5 @@ Bars.lua
 Actions.lua
 Effects.lua
 UI.lua
+Grid.lua
 Config.lua

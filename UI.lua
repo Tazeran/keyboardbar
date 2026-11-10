@@ -19,20 +19,92 @@ function UI:Layer()
 end
 
 local function bindKey(k) return UI.layer .. k.def.id end
+local MODS = { "SHIFT-", "CTRL-", "ALT-" }
+local MODNAME = { "Shift", "Ctrl", "Alt" }
+
+-- With the mini-icon setting on, a key that has a Shift / Ctrl / Alt mapping stays visible in the Bound and Play
+-- views even when its base layer is empty, so the reminder icons can be seen.
+local function modMapped(id)
+    if KB.db.ui.modMini ~= true then return false end
+    for i = 1, 3 do
+        if KB:GetAction(MODS[i] .. id) then return true end
+    end
+    return false
+end
 
 -- Key frames ----------------------------------------------------------------
-local function receive(k)
+local function dlog(msg)
+    if KB.Debug then KB.Debug:Log("drag", msg) end
+end
+local function cur()
+    local t, a, b, c = GetCursorInfo()
+    return t and (tostring(t) .. ":" .. tostring(c or a)) or "empty"
+end
+
+local function receive(k, defer)
     if InCombatLockdown() or k.def.fixed then return end
     local a = KB:ActionFromCursor()
     if not a then return end
     local bk = bindKey(k)
     local old = KB:GetAction(bk)
+    dlog(("receive on %s: new=%s old=%s defer=%s cursor=%s"):format(bk, a.name, old and old.name or "-", tostring(defer), cur()))
     UI.dragSrc = nil -- a drop on a key: this drag is settled
     KB:SetAction(bk, a)
     ClearCursor()
+    if old and defer then
+        -- right-click: the game clears the cursor again as it finishes the click, so the swapped-out icon is
+        -- picked up a moment later, once the button is released (see UI:RightDrop)
+        UI:Refresh(true)
+        return old
+    end
     if old then KB:PickupAction(old) end
+    if old and GetCursorInfo() then
+        -- the key's old action is now on the cursor: the move isn't over, so the view stays Full until that is placed too
+        UI.dragSrc = { bk = bk, action = old, orphan = true }
+    end
     UI:Refresh(true)
-    UI:RestoreView()
+    if not GetCursorInfo() then UI:RestoreView() end
+end
+
+UI.Receive = receive
+
+function UI:KeyUnderMouse()
+    if InCombatLockdown() then return nil end
+    for _, k in ipairs(keys) do
+        if k:IsShown() and k:GetAlpha() > 0 and not k.def.fixed and not k.cycle and k:IsMouseOver() then return k end
+    end
+end
+
+-- Right-click drop. Called from the raw mouse-down and from the key's own click handler (whichever sees the
+-- click first); a second call within a moment is ignored so a swap isn't undone.
+-- While the right button is still held after the drop, the key ignores drags (moving the mouse slightly would
+-- otherwise pick the icon that just landed straight back up), and the swapped-out icon is only put on the cursor
+-- once the button is released and the game has finished with the click (it clears the cursor on a right-click).
+function UI:RightDrop(k)
+    if InCombatLockdown() or k.def.fixed or not GetCursorInfo() then return end
+    k.rcDrop = true -- the key must not cast, or start a drag, because of this click
+    self.swapPending = true
+    local bk = bindKey(k)
+    local old = receive(k, true)
+    local waited, ticker = 0, nil
+    ticker = C_Timer.NewTicker(0.03, function()
+        waited = waited + 0.03
+        if IsMouseButtonDown("RightButton") and waited < 3 then return end
+        ticker:Cancel()
+        k.rcDrop = nil -- the button is up: the next press is a new click
+        C_Timer.After(0.05, function()
+            UI.swapPending = nil
+            if not old then return end -- nothing was displaced; receive() already scheduled the view restore
+            if InCombatLockdown() or GetCursorInfo() then
+                dlog(("swap pickup of %s skipped: combat=%s cursor=%s"):format(old.name, tostring(InCombatLockdown()), cur()))
+                return
+            end
+            KB:PickupAction(old)
+            dlog(("swap pickup %s (%s %s): cursor now %s"):format(old.name, tostring(old.type), tostring(old.id), cur()))
+            if GetCursorInfo() then UI.dragSrc = { bk = bk, action = old, orphan = true } else UI:RestoreView() end
+            UI:Refresh(true)
+        end)
+    end)
 end
 
 -- An icon pulled off a key and let go somewhere that isn't a key. By default it is removed (the key goes back
@@ -40,10 +112,22 @@ end
 function UI:SettleDrag(src)
     src = src or self.dragSrc
     if not src or self.dragSrc ~= src then return end -- already dropped on a key
+    if InCombatLockdown() then self.dragSrc = nil; return end
+    -- Let go over a key (a right-button release doesn't always reach the key as a drop): map it there.
+    if GetCursorInfo() then
+        local gs = KB.Grid and KB.Grid:SlotUnderMouse()
+        if gs then KB.Grid:Receive(gs); return end
+        for _, k in ipairs(keys) do
+            if k:IsShown() and k:GetAlpha() > 0 and not k.def.fixed and not k.cycle and k:IsMouseOver() then
+                receive(k)
+                return
+            end
+        end
+    end
     self.dragSrc = nil
-    if InCombatLockdown() then return end
+    dlog(("settle: removing %s (orphan=%s) cursor=%s"):format(src.action.name or "?", tostring(src.orphan), cur()))
     if GetCursorInfo() then ClearCursor() end
-    if KB.db.ui.dropRemoves == false then
+    if KB.db.ui.dropRemoves == false and not src.orphan then
         KB:SetAction(src.bk, src.action)
     else
         KB:Print(("Removed %s from %s."):format(src.action.name or "?", src.bk))
@@ -57,17 +141,24 @@ function UI:BeginDragView()
     if KB.db.ui.view == "full" then return true end
     if KB.db.ui.dragAnyView == false then return false end
     if InCombatLockdown() then return false end
-    self.dragPrevView = KB.db.ui.view
+    self.dragPrevView = self.dragPrevView or KB.db.ui.view
+    self.restoreAt = nil
     self:SetView("full")
     return true
 end
 
+-- Going back to the previous view is never done on the spot: rows collapsing under the cursor while an icon is
+-- still in hand would look like "let go in empty space" and delete it. RestoreView only schedules it; the watcher
+-- below does it once nothing is on the cursor, no mouse button is down, and a moment has passed.
 function UI:RestoreView()
-    local v = self.dragPrevView
+    if self.dragPrevView then self.restoreAt = GetTime() + 0.3 end
+end
+
+local function reallyRestoreView()
+    local v = UI.dragPrevView
     if not v then return end
-    if InCombatLockdown() then return end -- try again when this is next called; the view just stays Full meanwhile
-    self.dragPrevView = nil
-    if KB.db.ui.view ~= v then self:SetView(v) end
+    UI.dragPrevView, UI.restoreAt = nil, nil
+    if KB.db.ui.view ~= v then UI:SetView(v) end
 end
 
 -- Safety net: if the release was missed, the next click (or the mouse being up) settles the drag.
@@ -75,18 +166,70 @@ do
     local w = CreateFrame("Frame")
     local up = 0
     w:SetScript("OnUpdate", function(_, dt)
+        if UI.dragPrevView and UI.restoreAt and GetTime() >= UI.restoreAt then
+            if InCombatLockdown() or GetCursorInfo() or UI.dragSrc or UI.swapPending
+                or IsMouseButtonDown("RightButton") or IsMouseButtonDown("LeftButton") then
+                UI.restoreAt = GetTime() + 0.3
+            else
+                reallyRestoreView()
+            end
+        end
         if not UI.dragSrc then up = 0; return end
         if IsMouseButtonDown("RightButton") or IsMouseButtonDown("LeftButton") then up = 0; return end
         up = up + dt
-        if up > 0.3 and not MouseIsOver(UI.frame or UIParent) then up = 0; UI:SettleDrag() end
+        if up > 0.3 and not (UI.frame or UIParent):IsMouseOver() then up = 0; UI:SettleDrag() end
     end)
     pcall(function()
         w:RegisterEvent("GLOBAL_MOUSE_DOWN")
-        w:SetScript("OnEvent", function()
+        w:SetScript("OnEvent", function(_, _, button)
+            if UI.dragSrc or GetCursorInfo() then dlog(("mouse down %s: cursor=%s dragSrc=%s key=%s"):format(tostring(button), cur(), UI.dragSrc and UI.dragSrc.action.name or "-", UI:KeyUnderMouse() and UI:KeyUnderMouse().def.id or "-")) end
+            -- A right-click with an icon on the cursor, over a key: map/swap it there. This runs on the raw mouse-down,
+            -- before the game throws the cursor icon away on a right-click.
+            if button == "RightButton" and GetCursorInfo() then
+                local k = UI:KeyUnderMouse()
+                if k then UI:RightDrop(k); return end
+            end
+            -- Not over a key: a right-click anywhere makes the game throw the cursor icon away, and a click outside the
+            -- keyboard leaves it hanging; either way settle it now (remove / put back, per the setting).
             local src = UI.dragSrc
-            if src and not (UI.frame and MouseIsOver(UI.frame)) then C_Timer.After(0.05, function() UI:SettleDrag(src) end) end
+            if src and (button == "RightButton" or not (UI.frame and UI.frame:IsMouseOver())) then
+                C_Timer.After(0.05, function() UI:SettleDrag(src) end)
+            end
         end)
     end)
+end
+
+-- Second tooltip beside the main one listing gathering nodes and the skill each needs.
+function UI:ShowNodeTip(spellName)
+    local tip = self.nodeTip
+    if tip then tip:Hide() end
+    local skill, rank, nodes = KB:NodeInfo(spellName)
+    if not skill then return end
+    if not tip then
+        tip = CreateFrame("GameTooltip", "KeyboardBarNodeTip", UIParent, "GameTooltipTemplate")
+        self.nodeTip = tip
+    end
+    tip:SetOwner(GameTooltip, "ANCHOR_NONE")
+    tip:ClearAllPoints()
+    tip:SetPoint("TOPLEFT", GameTooltip, "TOPRIGHT", 2, 0)
+    tip:SetText(skill .. " nodes", 1, 0.82, 0)
+    if #nodes == 0 then
+        tip:AddLine("You can gather everything.", 0.5, 1, 0.5)
+    else
+        for _, n in ipairs(nodes) do
+            local ok = n[1] <= rank
+            if ok then
+                -- skill-up chance: orange >>> (req..+24), yellow >> (+25..+49), green > (+50..+99), gray: none
+                local t = n[3] or { n[1] + 25, n[1] + 50, n[1] + 100 }
+                local arrows = ""
+                if rank < t[1] then arrows = " |cffff8040>>>|r"
+                elseif rank < t[2] then arrows = " |cffffff00>>|r"
+                elseif rank < t[3] then arrows = " |cff40c040>|r" end
+                tip:AddDoubleLine(n[2] .. arrows, tostring(n[1]), 0.5, 1, 0.5, 0.5, 1, 0.5)
+            else tip:AddDoubleLine(n[2], tostring(n[1]), 1, 1, 1, 1, 0.4, 0.4) end
+        end
+    end
+    tip:Show()
 end
 
 local function createKey(parent, def, display)
@@ -143,9 +286,19 @@ local function createKey(parent, def, display)
             end
             return
         end
+        if btn == "RightButton" and self.rcDrop then
+            -- the right button already dropped an icon here on press: neither it nor its release may cast what just landed
+            KB:BlankKey(self); self.kbBlanked = true
+            return
+        end
         if GetCursorInfo() then
-            -- only a mouse release over this key drops the item here; a keyboard press of the same key must not
-            if not down and self:IsMouseOver() then receive(self) end
+            -- A left release over this key drops the item here; a right-click drops it on the press (the game
+            -- would otherwise throw the icon away). A keyboard press of the same key must never drop anything.
+            if btn == "RightButton" then
+                if down and self:IsMouseOver() then UI:RightDrop(self) end
+            elseif not down and self:IsMouseOver() then
+                receive(self)
+            end
             KB:BlankKey(self) -- placing an action must not also cast it
             self.kbBlanked = true
         elseif btn == "RightButton" and IsShiftKeyDown() and not down then
@@ -160,7 +313,8 @@ local function createKey(parent, def, display)
         if self.kbBlanked and not InCombatLockdown() then self.kbBlanked = nil; KB:ApplyBindings() end
     end)
     k:SetScript("OnDragStart", function(self, button)
-        if InCombatLockdown() then return end
+        -- Never start a drag while an icon is already in hand (it would be replaced and lost) or right after a drop here.
+        if InCombatLockdown() or GetCursorInfo() or self.rcDrop or UI.swapPending then return end
         -- Right-drag never casts (keys only have a left-click action), so only it moves keys.
         if button ~= "RightButton" then return end
         if not UI:BeginDragView() then
@@ -174,6 +328,7 @@ local function createKey(parent, def, display)
             if self.def.fixed then return end
             UI.dragSrc = { bk = bk, action = a }
             KB:PickupAction(a); KB:ClearAction(bk); UI:Refresh(true)
+            dlog(("drag start from %s: %s (%s %s) cursor=%s"):format(bk, a.name, tostring(a.type), tostring(a.id), cur()))
         else
             local sys = KB:GetSystemAction(bk)
             if sys then UI:StartSystemDrag(self, bk, sys) end
@@ -202,9 +357,16 @@ local function createKey(parent, def, display)
         else GameTooltip:SetText(bindKey(self), 1, 1, 1) end
         GameTooltip:AddLine(bindKey(self), 0.6, 0.8, 1)
         if self.sys and not a then GameTooltip:AddLine("Middle-click: unbind", 0.5, 0.5, 0.5) end
+        if KB.db.ui.modMini and UI.layer == "" then
+            for i = 1, 3 do
+                local ma = KB:GetAction(MODS[i] .. self.def.id)
+                if ma then GameTooltip:AddLine(MODNAME[i] .. ": " .. ma.name, 0.8, 0.8, 0.5) end
+            end
+        end
         GameTooltip:Show()
+        UI:ShowNodeTip(a and a.type == "spell" and a.name)
     end)
-    k:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    k:SetScript("OnLeave", function() GameTooltip:Hide(); if UI.nodeTip then UI.nodeTip:Hide() end end)
     return k
 end
 
@@ -224,6 +386,8 @@ local function paint(k, bg, bd)
         k:SetBackdropColor(bg[1], bg[2], bg[3], bg[4]); k:SetBackdropBorderColor(bd[1], bd[2], bd[3], noBorder and 0 or bd[4])
     end
 end
+
+UI.Paint = paint
 
 local function style(k, a, s, sys)
     k.action = a
@@ -317,6 +481,81 @@ local function style(k, a, s, sys)
     if KB.FX then pcall(KB.FX.Observe, KB.FX, k, a, s) end
 end
 
+-- Optional: Shift / Ctrl / Alt mappings of a key drawn as three small icons along its bottom edge (left / middle /
+-- right) while the base layer is showing. Purely visual: they take no mouse input, so clicks go to the key beneath.
+local function miniCooldown(cd, s)
+    if s.start == nil or s.dur == nil then cd:Clear(); return end
+    local ok = pcall(function()
+        if (issecretvalue and (issecretvalue(s.start) or issecretvalue(s.dur))) or s.dur > 0 then
+            if s.durObj and cd.SetCooldownFromDurationObject then cd:SetCooldownFromDurationObject(s.durObj)
+            else cd:SetCooldown(s.start, s.dur) end
+        else cd:Clear() end
+    end)
+    if not ok then cd:Clear() end
+end
+
+function UI:StyleMods(k)
+    local want = KB.db.ui.modMini == true and k.visible and self.layer == "" and not k.cycle and not k.def.fixed
+    local list
+    if want then
+        for i = 1, 3 do
+            local a = KB:GetAction(MODS[i] .. k.def.id)
+            if a then list = list or {}; list[i] = a end
+        end
+    end
+    if not list then
+        if k.mods then k.mods:Hide() end
+        return
+    end
+    local m = k.mods
+    if not m then
+        m = CreateFrame("Frame", nil, k)
+        m:SetAllPoints(); m:SetFrameLevel(k.cd:GetFrameLevel() + 3); m:EnableMouse(false)
+        for i = 1, 3 do
+            local c = {}
+            c.bg = m:CreateTexture(nil, "BACKGROUND"); c.bg:SetColorTexture(0, 0, 0, 0.9)
+            c.icon = m:CreateTexture(nil, "ARTWORK"); c.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            c.cd = CreateFrame("Cooldown", nil, m, "CooldownFrameTemplate")
+            c.cd:SetAllPoints(c.icon); c.cd:SetDrawEdge(false); c.cd:SetHideCountdownNumbers(true)
+            if c.cd.SetSwipeColor then c.cd:SetSwipeColor(0, 0, 0, 0.75) end
+            pcall(c.cd.EnableMouse, c.cd, false)
+            pcall(c.cd.SetMouseClickEnabled, c.cd, false)
+            pcall(c.cd.SetMouseMotionEnabled, c.cd, false)
+            m[i] = c
+        end
+        k.mods = m
+    end
+    m:Show()
+    local sz = math.max(6, math.floor(math.min(k:GetWidth(), k:GetHeight()) / 3 + 0.5))
+    local pt = { "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT" }
+    local dx = { 1, 0, -1 }
+    for i = 1, 3 do
+        local c, a = m[i], list[i]
+        if a then
+            local ok, s = pcall(KB.GetState, KB, a)
+            if not ok then s = {} end
+            c.icon:ClearAllPoints(); c.icon:SetPoint(pt[i], k, pt[i], dx[i], 1); c.icon:SetSize(sz, sz)
+            c.bg:ClearAllPoints(); c.bg:SetPoint("TOPLEFT", c.icon, -1, 1); c.bg:SetPoint("BOTTOMRIGHT", c.icon, 1, -1)
+            c.icon:SetTexture(s.icon)
+            local empty = false
+            pcall(function() empty = (a.type == "item" and s.count == 0) end)
+            c.icon:SetDesaturated(empty)
+            local r, g, b = 1, 1, 1
+            pcall(function()
+                if empty then r, g, b = 0.45, 0.45, 0.45
+                elseif s.usable == false then r, g, b = 0.4, 0.4, 0.4
+                elseif s.nomana then r, g, b = 0.4, 0.4, 1
+                elseif s.range == false then r, g, b = 1, 0.3, 0.3 end
+            end)
+            c.icon:SetVertexColor(r, g, b)
+            miniCooldown(c.cd, s)
+            c.icon:Show(); c.bg:Show(); c.cd:Show()
+        else
+            c.icon:Hide(); c.bg:Hide(); c.cd:Hide(); c.cd:Clear()
+        end
+    end
+end
+
 local function wanted(view, a, s, sys)
     if view == "full" then return true end
     if view == "bound" then return a ~= nil or sys ~= nil end
@@ -340,8 +579,9 @@ local function staticShow(k, view, layer)
     end
     if KB:IsCycleKey(k.def.id) and layer == "" and not a and KB.db.ui.alwaysShowCycle ~= false then return true end
     if view == "full" then return true end
-    if view == "bound" then return a ~= nil or sys ~= nil end
     if view == "cooldown" then return false end
+    if layer == "" and modMapped(k.def.id) then return true end
+    if view == "bound" then return a ~= nil or sys ~= nil end
     return a ~= nil -- "assigned"
 end
 
@@ -642,11 +882,26 @@ function UI:Refresh(force)
         local sys = (not a) and KB:GetSystemAction(bindKey(k)) or nil
         k.cycle = (KB:IsCycleKey(k.def.id) and self.layer == "" and not a) or nil
         local w = (k.cycle and KB.db.ui.alwaysShowCycle ~= false) or wanted(view, a, s, sys)
+        k.modOnly = nil
+        if not w and view ~= "cooldown" and self.layer == "" and modMapped(k.def.id) then w = true; k.modOnly = true end
         local show = UI:GroupOn(k.def.group) and w
         k.visible = show
         k:SetAlpha(show and 1 or 0)
         local sok, serr = pcall(style, k, a, s, sys)
         if not sok then KB.Debug:Err("style " .. k.def.id, serr) end
+        -- Shown only to carry its Shift / Ctrl / Alt mini icons: draw none of the key itself.
+        local hl, pu = k:GetHighlightTexture(), k:GetPushedTexture()
+        if hl then hl:SetAlpha(k.modOnly and 0 or 1) end
+        if pu then pu:SetAlpha(k.modOnly and 0 or 1) end
+        if k.modOnly then
+            k.bgArt:Hide(); k.normalArt:Hide()
+            k:SetBackdropColor(0, 0, 0, 0); k:SetBackdropBorderColor(0, 0, 0, 0)
+            k.label:SetAlpha(0); k.icon:Hide(); k.name:SetText(""); k.count:SetText(""); k.arrow:Hide()
+            k.cd:Clear(); k.cdText:SetText("")
+            if KB.FX then KB.FX:SetGlow(k, false) end
+        end
+        local mok, merr = pcall(self.StyleMods, self, k)
+        if not mok then KB.Debug:Err("mods " .. k.def.id, merr) end
         local tk = self.tray and self.tray[i]
         if tk then
             if view == "cooldown" and a and UI:GroupOn(k.def.group) then

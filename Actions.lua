@@ -33,11 +33,31 @@ end
 
 function KB:BlankKey(kf) clearAttrs(kf) end -- used while the cursor holds something
 
+-- Shift / Ctrl / Alt layers are bound to a small hidden secure button per mapped key (plain attributes, no modifier
+-- prefixes), so the cast does not depend on how the key's own button resolves the held modifier.
+KB.modProxies = KB.modProxies or {}
+local function modProxy(bk)
+    local p = KB.modProxies[bk]
+    if not p then
+        local name = "KeyboardBarMod" .. bk:gsub("%W", function(c) return ("_%02x"):format(c:byte()) end)
+        p = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate")
+        p:RegisterForClicks("AnyUp", "AnyDown")
+        p.bk = bk
+        p:HookScript("PreClick", function(self, btn, down)
+            KB.Debug:Log("modclick", ("%s btn=%s down=%s type=%s spell=%s shift=%s"):format(self.bk, tostring(btn), tostring(down),
+                tostring(self:GetAttribute("type1")), tostring(self:GetAttribute("spell1")), tostring(IsShiftKeyDown())))
+        end)
+        KB.modProxies[bk] = p
+    end
+    return p
+end
+
 function KB:ApplyBindings()
     if KB.UI then KB.UI.rev = (KB.UI.rev or 0) + 1 end -- layouts depend on what is bound
     if InCombatLockdown() then self.pendingApply = true; KB.Debug:Log("bindings", "deferred (combat)"); return end
     self.pendingApply = false
     ClearOverrideBindings(self.owner)
+    for _, px in pairs(self.modProxies) do px:SetAttribute("type1", ""); px:SetAttribute("spell1", nil); px:SetAttribute("item1", nil); px:SetAttribute("macro1", nil) end
     local keys = self:Profile().keys
     local n = 0
     for _ in pairs(keys) do n = n + 1 end
@@ -59,7 +79,16 @@ function KB:ApplyBindings()
                     kf:SetAttribute(p .. "type1", "macro"); kf:SetAttribute(p .. "macro1", a.name)
                     kf:SetAttribute(p .. "type2", "macro"); kf:SetAttribute(p .. "macro2", a.name)
                 end
-                SetOverrideBindingClick(self.owner, true, l[1] .. kf.def.id, kf:GetName(), "LeftButton")
+                if l[1] == "" then
+                    SetOverrideBindingClick(self.owner, true, kf.def.id, kf:GetName(), "LeftButton")
+                else
+                    local px = modProxy(l[1] .. kf.def.id)
+                    px:SetAttribute("type1", a.type); px:SetAttribute("spell1", nil); px:SetAttribute("item1", nil); px:SetAttribute("macro1", nil)
+                    if a.type == "spell" then px:SetAttribute("spell1", a.name)
+                    elseif a.type == "item" then px:SetAttribute("item1", "item:" .. a.id)
+                    elseif a.type == "macro" then px:SetAttribute("macro1", a.name) end
+                    SetOverrideBindingClick(self.owner, true, l[1] .. kf.def.id, px:GetName(), "LeftButton")
+                end
             end
         end
     end
@@ -446,6 +475,39 @@ function KB:SkillText(spellName)
     return e and (e[1] .. "/" .. e[2]) or nil
 end
 
+-- Gathering nodes: {skill required, name[, {yellow, green, gray start}]} (Classic-era nodes; default +25/+50/+100)
+local NODES = {
+    Herbalism = { {1,"Peacebloom"},{1,"Silverleaf"},{15,"Earthroot"},{50,"Mageroyal"},{70,"Briarthorn"},{85,"Stranglekelp"},
+        {100,"Bruiseweed"},{115,"Wild Steelbloom"},{120,"Grave Moss"},{125,"Kingsblood"},{150,"Liferoot"},{160,"Fadeleaf"},
+        {170,"Goldthorn"},{185,"Khadgar's Whisker"},{195,"Wintersbite"},{205,"Firebloom"},{210,"Purple Lotus"},
+        {220,"Arthas' Tears"},{230,"Sungrass"},{235,"Blindweed"},{245,"Ghost Mushroom"},{250,"Gromsblood"},
+        {260,"Golden Sansam"},{270,"Dreamfoil"},{280,"Mountain Silversage"},{285,"Plaguebloom"},{290,"Icecap"},
+        {300,"Bloodvine"},{300,"Black Lotus"} },
+    Mining = { {1,"Copper Vein"},{65,"Tin Vein"},{65,"Incendicite Mineral Vein"},{75,"Silver Vein"},{75,"Lesser Bloodstone Deposit"},
+        {125,"Iron Deposit"},{150,"Indurium Mineral Vein"},{155,"Gold Vein"},{175,"Mithril Deposit"},{230,"Truesilver Deposit"},
+        {230,"Dark Iron Deposit"},{245,"Small Thorium Vein"},{275,"Rich Thorium Vein",{290,300,350}} },
+}
+
+-- For the Herbalism / Mining icons: returns skill name, current rank and the nodes still out of reach (or all).
+function KB:NodeInfo(spellName)
+    if not spellName or KB.db.ui.nodeTips == false then return nil end
+    if not skills then skills = readSkills() end
+    local skill = SKILL_ALIAS[spellName] or spellName
+    if not NODES[skill] then
+        for n in pairs(NODES) do if spellName:find(n, 1, true) then skill = n; break end end
+    end
+    local list = NODES[skill]
+    if not list then return nil end
+    local e = skills[skill]
+    local rank = e and e[1] or 0
+    local hide = KB.db.ui.nodeHideKnown == true
+    local out = {}
+    for _, n in ipairs(list) do
+        if not (hide and n[1] <= rank) then out[#out + 1] = n end
+    end
+    return skill, rank, out
+end
+
 local sk = CreateFrame("Frame")
 sk:RegisterEvent("SKILL_LINES_CHANGED")
 sk:RegisterEvent("PLAYER_LOGIN")
@@ -459,10 +521,20 @@ end)
 -- When a spell name appears in the spellbook that wasn't there before (a new ability's first rank; later
 -- ranks keep the same name), it goes on the first free key in the main block, searching from the top row
 -- down (or the bottom row up, per the setting). Free = nothing assigned and no game binding showing.
+-- Usable racial abilities (they live on the General tab with professions and other non-class spells).
+local RACIAL = {
+    ["Stoneform"] = true, ["Find Treasure"] = true, ["Perception"] = true, ["Escape Artist"] = true, ["Shadowmeld"] = true,
+    ["Blood Fury"] = true, ["Cannibalize"] = true, ["Will of the Forsaken"] = true, ["War Stomp"] = true, ["Berserking"] = true,
+    ["Arcane Torrent"] = true, ["Gift of the Naaru"] = true, ["Mana Tap"] = true, ["Every Man for Himself"] = true,
+    ["Rocket Jump"] = true, ["Rocket Barrage"] = true, ["Darkflight"] = true, ["Rummage"] = true,
+}
+
 local function knownSpells(classOnly)
     local t, order = {}, {}
-    local skipLine = classOnly and 1 or nil -- the General tab (professions, racials...) isn't "class abilities"
+    local skipLine = classOnly and 1 or nil -- the General tab: only its racials count as "class abilities"
+    local general = false
     local function add(name, passive)
+        if general and not RACIAL[name] then return end
         if name and not passive and not t[name] then
             local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(name)
             t[name] = (info and info.spellID) or true -- the id changes when a new rank is learned
@@ -474,7 +546,8 @@ local function knownSpells(classOnly)
             local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
             for line = 1, C_SpellBook.GetNumSpellBookSkillLines() do
                 local info = C_SpellBook.GetSpellBookSkillLineInfo(line)
-                if info and line ~= skipLine then
+                if info then
+                    general = (line == skipLine)
                     for i = (info.itemIndexOffset or 0) + 1, (info.itemIndexOffset or 0) + (info.numSpellBookItems or 0) do
                         local it = C_SpellBook.GetSpellBookItemInfo(i, bank)
                         if it and (not Enum.SpellBookItemType or it.itemType == Enum.SpellBookItemType.Spell) then add(it.name, it.isPassive) end
@@ -487,7 +560,7 @@ local function knownSpells(classOnly)
         if next(t) == nil and GetNumSpellTabs and GetSpellTabInfo and GetSpellBookItemName then
             for tab = 1, GetNumSpellTabs() do
                 local _, _, off, n = GetSpellTabInfo(tab)
-                if tab == skipLine then n = 0 end
+                general = (tab == skipLine)
                 for i = off + 1, off + n do
                     local name = GetSpellBookItemName(i, "spell")
                     add(name, IsPassiveSpell and IsPassiveSpell(i, "spell"))

@@ -114,6 +114,7 @@ function KB:SetProfile(name)
     self.db.chars[charKey()].profile = name
     self:Profile() -- create if missing
     self:ApplyBindings()
+    if self.Grid then self.Grid:Layout() end
     if self.UI then self.UI:Refresh(true) end
 end
 
@@ -160,6 +161,10 @@ SlashCmdList.KEYBOARDBAR = function(msg)
         KB.Config:Toggle()
     elseif cmd == "toggle" or cmd == "show" or cmd == "hide" then
         UI:Toggle()
+    elseif cmd == "layout" or cmd == "behavior" or cmd == "effects" or cmd == "profiles" then
+        KB.Config:Toggle(cmd == "profiles" and "Profile" or cmd)
+    elseif cmd == "grid" then
+        KB.Grid:Toggle()
     elseif cmd == "fill" then
         KB:FillMissing()
     elseif cmd == "whoami" then

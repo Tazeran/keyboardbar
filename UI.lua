@@ -22,6 +22,16 @@ local function bindKey(k) return UI.layer .. k.def.id end
 local MODS = { "SHIFT-", "CTRL-", "ALT-" }
 local MODNAME = { "Shift", "Ctrl", "Alt" }
 
+-- Movement keys (W A S D ...): the arrow rotation of the key's game movement binding, if it has one and nothing of yours.
+local ARROW_KEYS = { UP = true, DOWN = true, LEFT = true, RIGHT = true }
+local function moveRot(id)
+    if ARROW_KEYS[id] and KB.db.ui.wasdArrowKeys ~= true then return nil end -- the arrow-key set is optional
+    if KB:GetAction(id) then return nil end
+    local s = KB:GetSystemAction(id)
+    if not s then return nil end
+    return (select(2, KB:SystemInfo(s)))
+end
+
 -- With the mini-icon setting on, a key that has a Shift / Ctrl / Alt mapping stays visible in the Bound and Play
 -- views even when its base layer is empty, so the reminder icons can be seen.
 local function modMapped(id)
@@ -342,6 +352,7 @@ local function createKey(parent, def, display)
         end
     end)
     k:SetScript("OnEnter", function(self)
+        if self:GetAlpha() == 0 then return end -- a hidden spot
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local a = self.action
         if a and a.type == "spell" then
@@ -395,7 +406,7 @@ local function style(k, a, s, sys)
     k.label:SetText(k.cycle and (k.def.id == "`" and "~" or k.def.label) or k.def.label)
     if k.cycle then
         k.icon:Hide(); k.count:SetText(""); k.cd:Clear(); k.cdText:SetText(""); k.arrow:Hide()
-        k.name:SetText(KB.VIEW_LABEL[KB.db.ui.view] or "")
+        k.name:SetText("Cycle")
         paint(k, { 0.1, 0.25, 0.5, 0.7 }, { 0.4, 0.6, 0.9, 1 })
         k.label:SetAlpha(1)
         return
@@ -571,6 +582,9 @@ end
 -- which then rearranges the protected keys even during combat.
 -- layer: "" / "SHIFT-" / "CTRL-" / "ALT-" (or "X" = a modifier combination, nothing bound).
 local function staticShow(k, view, layer)
+    -- Holding Shift / Ctrl / Alt keeps the rows and collapse the base layer has (setting, on by default), so icons
+    -- don't jump around: the layout always comes from the base layer's contents.
+    if layer ~= "" and KB.db.ui.holdLayout ~= false then layer = "" end
     local a, sys
     if layer ~= "X" then
         local bk = layer .. k.def.id
@@ -580,6 +594,7 @@ local function staticShow(k, view, layer)
     if KB:IsCycleKey(k.def.id) and layer == "" and not a and KB.db.ui.alwaysShowCycle ~= false then return true end
     if view == "full" then return true end
     if view == "cooldown" then return false end
+    if KB.db.ui.wasdAlways == true and view ~= "full" and moveRot(k.def.id) then return true end
     if layer == "" and modMapped(k.def.id) then return true end
     if view == "bound" then return a ~= nil or sys ~= nil end
     return a ~= nil -- "assigned"
@@ -881,19 +896,40 @@ function UI:Refresh(force)
         if not ok then KB.Debug:Err("state " .. k.def.id, s); s = {} end
         local sys = (not a) and KB:GetSystemAction(bindKey(k)) or nil
         k.cycle = (KB:IsCycleKey(k.def.id) and self.layer == "" and not a) or nil
-        local w = (k.cycle and KB.db.ui.alwaysShowCycle ~= false) or wanted(view, a, s, sys)
+        local w
         k.modOnly = nil
-        if not w and view ~= "cooldown" and self.layer == "" and modMapped(k.def.id) then w = true; k.modOnly = true end
+        local baseSys = KB:GetSystemAction(k.def.id)
+        k.wasdSimple = (KB.db.ui.wasdAlways == true and (view == "bound" or view == "assigned") and not a and moveRot(k.def.id) ~= nil) or nil
+        if self.layer ~= "" and KB.db.ui.holdLayout ~= false then
+            -- The spots are the base layer's (see staticShow), but only keys with something on THIS layer are drawn.
+            local id = k.def.id
+            local ba = KB:GetAction(id)
+            local bs = (not ba) and KB:GetSystemAction(id) or nil
+            local cyc = KB:IsCycleKey(id) and not ba and KB.db.ui.alwaysShowCycle ~= false
+            local spot = cyc or wanted(view, ba, nil, bs) or (view ~= "cooldown" and modMapped(id))
+            w = spot and (cyc or wanted(view, a, s, sys))
+        else
+            w = (k.cycle and KB.db.ui.alwaysShowCycle ~= false) or wanted(view, a, s, sys)
+            if not w and view ~= "cooldown" and self.layer == "" and modMapped(k.def.id) then w = true; k.modOnly = true end
+        end
         local show = UI:GroupOn(k.def.group) and w
+        if k.wasdSimple and UI:GroupOn(k.def.group) then show = true end
         k.visible = show
         k:SetAlpha(show and 1 or 0)
-        local sok, serr = pcall(style, k, a, s, sys)
+        local sok, serr = pcall(style, k, a, s, sys or (k.wasdSimple and baseSys) or nil)
         if not sok then KB.Debug:Err("style " .. k.def.id, serr) end
         -- Shown only to carry its Shift / Ctrl / Alt mini icons: draw none of the key itself.
         local hl, pu = k:GetHighlightTexture(), k:GetPushedTexture()
         if hl then hl:SetAlpha(k.modOnly and 0 or 1) end
         if pu then pu:SetAlpha(k.modOnly and 0 or 1) end
-        if k.modOnly then
+        if k.wasdSimple then
+            -- collapsed views: just the arrow and the key letter, no box and no name text
+            k.bgArt:Hide(); k.normalArt:Hide()
+            k:SetBackdropColor(0, 0, 0, 0); k:SetBackdropBorderColor(0, 0, 0, 0)
+            k.name:SetText(""); k.count:SetText(""); k.icon:Hide()
+            if hl then hl:SetAlpha(0) end
+            if pu then pu:SetAlpha(0) end
+        elseif k.modOnly then
             k.bgArt:Hide(); k.normalArt:Hide()
             k:SetBackdropColor(0, 0, 0, 0); k:SetBackdropBorderColor(0, 0, 0, 0)
             k.label:SetAlpha(0); k.icon:Hide(); k.name:SetText(""); k.count:SetText(""); k.arrow:Hide()

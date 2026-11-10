@@ -93,7 +93,7 @@ local RESETS = {
     Behavior = function()
         local u = ui()
         u.showNames, u.alwaysShowCycle, u.skillNumbers, u.autoPlace, u.autoFromBottom = false, nil, nil, nil, nil
-        u.dropRemoves, u.dragAnyView, u.modMini = nil, nil, nil
+        u.dropRemoves, u.dragAnyView, u.modMini, u.holdLayout, u.wasdAlways, u.wasdArrowKeys = nil, nil, nil, nil, nil, nil
         KB.UI:Refresh(true)
     end,
     Grid = function()
@@ -235,6 +235,16 @@ function C:Build()
         checkbox(tf, Y(), "Profession skill (45/75) on keys", function() return ui().skillNumbers ~= false end,
             function(v) ui().skillNumbers = v; KB.UI:Refresh(true) end, nil, nil,
             "Shows your skill level in the corner of profession spells such as Smelting."); step()
+        checkbox(tf, Y(), "Keep the key layout when holding Shift/Ctrl/Alt", function() return ui().holdLayout ~= false end,
+            function(v) ui().holdLayout = v; KB.UI.rev = (KB.UI.rev or 0) + 1; KB.UI:Refresh(true) end, nil, nil,
+            "The base keys decide which rows and keys are shown (and collapsed); holding a modifier keeps that arrangement and only swaps the icons, so nothing jumps around. Off: each layer shows only its own mapped keys."); step()
+        checkbox(tf, Y(), "Movement arrows (WASD) in Bound/Play views", function() return ui().wasdAlways == true end,
+            function(v) ui().wasdAlways = v; KB.UI.rev = (KB.UI.rev or 0) + 1; KB.UI:Refresh(true) end, nil, nil,
+            "In the collapsed views, always show the movement keys as just an arrow and the key letter: no box, no name text. The Full view still draws them normally."); step()
+        checkbox(tf, Y(), "Also the arrow-key movement set", function() return ui().wasdArrowKeys == true end,
+            function(v) ui().wasdArrowKeys = v; KB.UI.rev = (KB.UI.rev or 0) + 1; KB.UI:Refresh(true) end, nil,
+            function() return ui().wasdAlways == true end,
+            "Also keep the arrow keys (Up / Down / Left / Right) visible in the collapsed views when they are bound to movement. Off: they hide like any other key."); step()
         checkbox(tf, Y(), "Show Shift/Ctrl/Alt mappings as mini icons", function() return ui().modMini == true end,
             function(v) ui().modMini = v; KB.UI.rev = (KB.UI.rev or 0) + 1; KB.UI:Refresh(true) end, nil, nil,
             "Small icons along the bottom of a key (left Shift, middle Ctrl, right Alt) remind you what is on its modifier layers. They are only a reminder: clicks go to the key underneath."); step()

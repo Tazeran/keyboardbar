@@ -6,6 +6,14 @@ key on your real keyboard (or clicking it) uses it. It replaces the Blizzard act
 
 > Status: active development. Built and tested against WoW Forever; other clients are untested.
 
+![Full keyboard view](docs/Full.png)
+
+*Full view: every key is an action slot.*
+
+![Collapsed view](docs/Collapsed.png)
+
+*Collapsed view: only the keys you use, so it takes little screen space.*
+
 ## Features
 
 - **Keyboard as the bar.** Main block, navigation cluster and numpad, drawn like a real keyboard. Drag spells,

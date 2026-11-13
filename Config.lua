@@ -93,7 +93,7 @@ local RESETS = {
     Behavior = function()
         local u = ui()
         u.showNames, u.alwaysShowCycle, u.skillNumbers, u.autoPlace, u.autoFromBottom = false, nil, nil, nil, nil
-        u.dropRemoves, u.dragAnyView, u.modMini, u.holdLayout, u.wasdAlways, u.wasdArrowKeys = nil, nil, nil, nil, nil, nil
+        u.dropRemoves, u.dragAnyView, u.modMini, u.holdLayout, u.wasdAlways, u.wasdArrowKeys, u.showMana = nil, nil, nil, nil, nil, nil, nil
         KB.UI:Refresh(true)
     end,
     Grid = function()
@@ -227,6 +227,9 @@ function C:Build()
     section("Behavior", function(tf, Y, step)
         checkbox(tf, Y(), "Show keyboard", function() return KB.UI.frame:IsShown() end,
             function(v) if v ~= KB.UI.frame:IsShown() then KB.UI:Toggle() end end); step()
+        checkbox(tf, Y(), "Show mana cost on spells", function() return ui().showMana == true end,
+            function(v) ui().showMana = v; KB.UI:Refresh(true) end, nil, nil,
+            "A small blue number in the top-right corner of spells that cost mana (keys and the icon grid)."); step()
         checkbox(tf, Y(), "Show ability names on keys", function() return ui().showNames end,
             function(v) ui().showNames = v end); step()
         checkbox(tf, Y(), "Always show the cycle key (~)", function() return ui().alwaysShowCycle ~= false end,

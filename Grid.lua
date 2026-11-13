@@ -152,6 +152,8 @@ local function createSlot(i)
     over:SetAllPoints(); over:SetFrameLevel(s.cd:GetFrameLevel() + 2)
     s.count = over:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     s.count:SetPoint("BOTTOMRIGHT", -2, 2)
+    s.mana = over:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+    s.mana:SetPoint("TOPRIGHT", -2, -2); s.mana:SetTextColor(0.35, 0.6, 1)
 
     s:HookScript("PreClick", function(self, btn, down)
         if InCombatLockdown() then return end
@@ -268,6 +270,8 @@ end
 -- Display -------------------------------------------------------------------
 local function paintSlot(s)
     local a = getAction(s)
+    local c = KB.db.ui.showMana == true and a and a.type == "spell" and KB:ManaCost(a.name)
+    s.mana:SetText(c and tostring(c) or "")
     if not a then
         s.icon:Hide(); s.count:SetText(""); s.cd:Clear()
         KB.UI.Paint(s, { 0.08, 0.08, 0.1, 0.8 }, { 0.3, 0.3, 0.35, 1 }) -- same look as an empty key

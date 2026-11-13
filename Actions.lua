@@ -175,6 +175,28 @@ function KB:GetState(a)
     return s
 end
 
+-- Mana cost of a spell (nil when it costs no mana). Cached briefly: it only changes with rank, level or talents.
+local manaCache = {}
+function KB:ManaCost(name)
+    local e = manaCache[name]
+    local now = GetTime()
+    if e and now - e.t < 1 then return e.v end
+    local v
+    pcall(function()
+        local costs
+        if C_Spell and C_Spell.GetSpellPowerCost then costs = C_Spell.GetSpellPowerCost(name)
+        elseif GetSpellPowerCost then costs = GetSpellPowerCost(name) end
+        local mana = (Enum and Enum.PowerType and Enum.PowerType.Mana) or 0
+        if type(costs) == "table" then
+            for _, c in ipairs(costs) do
+                if c.type == mana and c.cost and c.cost > 0 then v = c.cost; break end
+            end
+        end
+    end)
+    manaCache[name] = { t = now, v = v }
+    return v
+end
+
 -- System (game) bindings ------------------------------------------------------
 -- Read from the game's own binding table, so remapping elsewhere in WoW shows up here.
 local sysCache = {}

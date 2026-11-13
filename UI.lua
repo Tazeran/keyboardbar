@@ -279,6 +279,8 @@ local function createKey(parent, def, display)
     k.arrow:SetSize(18, 18); k.arrow:SetPoint("CENTER", 0, 3); k.arrow:Hide()
     k.count = over:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     k.count:SetPoint("BOTTOMRIGHT", -2, 2)
+    k.mana = over:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+    k.mana:SetPoint("TOPRIGHT", -2, -2); k.mana:SetTextColor(0.35, 0.6, 1)
     if KB.FX then KB.FX:Attach(k) end
     if display then k:EnableMouse(false); return k end
     k:HookScript("OnEnter", function(self) if KB.FX then KB.FX:Dismiss(self.def.id) end end)
@@ -402,6 +404,10 @@ UI.Paint = paint
 
 local function style(k, a, s, sys)
     k.action = a
+    if k.mana then
+        local c = KB.db.ui.showMana == true and a and a.type == "spell" and KB:ManaCost(a.name)
+        k.mana:SetText(c and tostring(c) or "")
+    end
     k.sys = sys
     k.label:SetText(k.cycle and (k.def.id == "`" and "~" or k.def.label) or k.def.label)
     if k.cycle then

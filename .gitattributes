@@ -1,0 +1,5 @@
+# Left out of "Download ZIP" and release source archives (a plain git clone still has them),
+# so people installing the addon don't get README screenshots or repo housekeeping files.
+docs/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore

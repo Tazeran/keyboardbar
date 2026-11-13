@@ -65,34 +65,21 @@ mklink /J "<WoW>\_forever_\Interface\AddOns\KeyboardBar" "<path to this repo>"
 
 | Command | Does |
 |---|---|
-| `/kb toggle` | Show / hide the keyboard |
-| `/kb view [full\|bound\|assigned\|cooldown]` | Set or cycle the view |
-| `/kb grid` | Show / hide the icon grid |
+| `/kb` | Open the settings pane for keyboard bars |
 | `/kb fill` | Place every missing class ability and racial on free keys |
-| `/kb layout\|behavior\|effects\|profiles` | Open that settings tab |
-| `/kb scale <n>`, `/kb gap [tight\|normal\|loose]`, `/kb sizes`, `/kb style` | Quick layout changes |
+
+| `/kb toggle` | Show / hide the keyboard |
+| `/kb bars` | Hide the Blizzard action bars (reload to undo) |
+| `/kb grid` | Show / hide the icon grid |
 | `/kb nav`, `/kb numpad` | Toggle the navigation cluster / numpad |
 | `/kb cyclekey <KEY\|off>` | Choose the view-cycle key |
-| `/kb bars` | Hide the Blizzard action bars (reload to undo) |
 | `/kb profile [name]` | Show or switch profile |
 | `/kb reset` | Clear every key in the current profile |
 | `/kb whoami` | Show the character name / profile this addon sees |
+| `/kb scale <n>`, `/kb gap [tight\|normal\|loose]`, `/kb sizes`, `/kb style` | Quick layout changes |
+| `/kb view [full\|bound\|assigned\|cooldown]` | Set or cycle the view |
+| `/kb layout\|behavior\|effects\|profiles` | Open that settings tab |
 | `/kb debug`, `/kb snapshot`, `/kb clearlog` | Debug log tools (written to SavedVariables on `/reload`) |
-
-## Layout of the code
-
-| File | Role |
-|---|---|
-| `Core.lua` | Saved variables, profiles (per character GUID), slash commands |
-| `Layout.lua` | Key definitions and keyboard geometry |
-| `Bars.lua` | Hides the Blizzard action bars |
-| `Actions.lua` | Key -> action storage, secure buttons and bindings, spell/skill/auto-place logic |
-| `Effects.lua` | Key animations (sparkle / glow / flash) |
-| `UI.lua` | Keyboard window, key rendering, drag and drop, secure layout header |
-| `Grid.lua` | The optional icon grid |
-| `Config.lua` | The `/kb` settings window |
-| `Debug.lua` | Debug log and state snapshots |
-| `Bindings.xml` | Optional key-binding entries (cycle view, collapse, toggle) in the game's Key Bindings screen |
 
 ## Notes
 
@@ -101,7 +88,3 @@ mklink /J "<WoW>\_forever_\Interface\AddOns\KeyboardBar" "<path to this repo>"
 - Spells are stored by name, so a key always uses your highest known rank.
 - Many details (skill-up color ranges, the racial list) come from Classic-era data and may need adjusting for
   other client versions.
-
-## License
-
-No license has been chosen yet; all rights reserved until one is added.
